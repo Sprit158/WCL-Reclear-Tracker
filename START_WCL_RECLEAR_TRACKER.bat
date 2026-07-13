@@ -1,5 +1,5 @@
 @echo off
-title WCL Reclear Tracker v1.7.1
+title WCL Reclear Tracker v1.7.3
 
 rem Find a working Python command. The standard Windows installer often
 rem provides "py" without adding "python" to PATH.
@@ -21,7 +21,7 @@ if not defined PYTHON_CMD goto nopython
 
 :menu
 cls
-echo WCL Reclear Tracker v1.7.1
+echo WCL Reclear Tracker v1.7.3
 echo.
 echo 1. Run main tracker
 echo 2. Find likely 2-day guilds
@@ -68,25 +68,27 @@ echo Settings and maintenance
 echo.
 echo 1. Change saved guild
 echo 2. Set up or test WCL v2 Client ID and Secret
-echo 3. Forget saved WCL v1 API key
-echo 4. Forget saved WCL v2 credentials
-echo 5. Check current settings
-echo 6. Clear cached WCL and comparison data
-echo 7. Clear output files
-echo 8. Run app self-check
-echo 9. Back to main menu
+echo 3. Test one guild's actual raid days and WCL point cost
+echo 4. Forget saved WCL v1 API key
+echo 5. Forget saved WCL v2 credentials
+echo 6. Check current settings
+echo 7. Clear cached WCL and comparison data
+echo 8. Clear output files
+echo 9. Run app self-check
+echo 10. Back to main menu
 echo.
 set /p settings_choice=Choose an option: 
 
 if "%settings_choice%"=="1" goto changeguild
 if "%settings_choice%"=="2" goto setupv2
-if "%settings_choice%"=="3" goto resetkey
-if "%settings_choice%"=="4" goto resetv2
-if "%settings_choice%"=="5" goto check
-if "%settings_choice%"=="6" goto clearcache
-if "%settings_choice%"=="7" goto clearoutput
-if "%settings_choice%"=="8" goto selfcheck
-if "%settings_choice%"=="9" goto menu
+if "%settings_choice%"=="3" goto testschedule
+if "%settings_choice%"=="4" goto resetkey
+if "%settings_choice%"=="5" goto resetv2
+if "%settings_choice%"=="6" goto check
+if "%settings_choice%"=="7" goto clearcache
+if "%settings_choice%"=="8" goto clearoutput
+if "%settings_choice%"=="9" goto selfcheck
+if "%settings_choice%"=="10" goto menu
 
 echo.
 echo Invalid option.
@@ -107,6 +109,11 @@ goto settingsfinished
 :setupv2
 cls
 %PYTHON_CMD% START_HERE.py --setup-v2
+goto settingsfinished
+
+:testschedule
+cls
+%PYTHON_CMD% START_HERE.py --test-schedule-guild
 goto settingsfinished
 
 :resetkey
