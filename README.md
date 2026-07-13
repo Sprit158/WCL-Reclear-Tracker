@@ -16,6 +16,8 @@ Version 1.7.2 uses a metadata-first report pass. It filters known unrelated zone
 
 The local WoWProgress backup is copied to the persistent app-data folder the first time it is found. If a newly unpacked version is missing it, the app can recover the CSV from an older adjacent version automatically.
 
+Version 1.7.3 processes every eligible guild above the saved guild rank instead of stopping after 25. A one-guild WCL v2 test verifies raid nights from target-zone report metadata and displays the WCL points used before wider enrichment is enabled.
+
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
 ## Privacy
