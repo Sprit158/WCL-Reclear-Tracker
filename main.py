@@ -167,6 +167,7 @@ def main() -> None:
         report_zone_name,
         resolve_midnight_zone_ids,
         season_range_ms,
+        shortlist_reports_for_deep_inspection,
     )
     from logger_utils import RunLogger
     from processor import classify_reports, load_report_codes, rows_to_dicts
@@ -365,12 +366,40 @@ def main() -> None:
 
         logger.print(f"Guild reports source: {guild_reports_source}")
         logger.print(f"Guild reports found in season range: {len(guild_reports)}")
-        logger.print("Inspecting every guild report in the season range before selecting candidates...")
 
         candidates = []
         boss_filter_config = config.get("boss_filter", {})
         selection_config = config.get("report_selection", {})
         minimum_pulls = int(selection_config.get("minimum_mythic_pulls", 1))
+
+        deep_reports, metadata_reasons = shortlist_reports_for_deep_inspection(
+            reports=guild_reports,
+            tz_name=tz_name,
+            midnight_zone_ids=midnight_zone_ids,
+            name_contains=zone_config.get("name_contains", ["Midnight"]),
+            zone_lookup=zone_lookup,
+            selection_config=selection_config,
+        )
+        deep_codes = {report_code(meta) for meta in deep_reports}
+        cached_codes: set[str] = set()
+        if not force_refresh:
+            for meta in guild_reports:
+                code = report_code(meta)
+                if not code:
+                    continue
+                try:
+                    if cache.load_report(code) is not None:
+                        cached_codes.add(code)
+                except CacheError:
+                    # A damaged cache entry should be re-fetched only if the
+                    # metadata first pass selected it.
+                    pass
+        inspect_codes = deep_codes | cached_codes
+        estimated_new_requests = len(deep_codes - cached_codes)
+        logger.print(
+            f"Metadata-first pass selected {len(deep_codes)} report(s); "
+            f"{estimated_new_requests} new detailed WCL request(s) expected."
+        )
 
         for meta in guild_reports:
             code = report_code(meta)
@@ -384,6 +413,27 @@ def main() -> None:
                 name_contains=zone_config.get("name_contains", ["Midnight"]),
                 zone_lookup=zone_lookup,
             )
+
+            if code not in inspect_codes:
+                report_audit.append(
+                    {
+                        "date": local_date,
+                        "report_code": code,
+                        "title": meta.get("title", ""),
+                        "start_ms": int(meta.get("start", 0)),
+                        "end_ms": int(meta.get("end", 0)),
+                        "zone_id": report_zone_id(meta),
+                        "zone_name": report_zone_name(meta, zone_lookup),
+                        "metadata_zone_match": meta_zone_match,
+                        "cache_source": "not_requested",
+                        "all_mythic_boss_pulls": 0,
+                        "tracked_boss_pulls": 0,
+                        "tracked_boss_breakdown": "",
+                        "candidate": False,
+                        "reason": metadata_reasons.get(code, "skipped_by_metadata_first_pass"),
+                    }
+                )
+                continue
 
             try:
                 report_data, source = cache.fetch_or_load_report(
