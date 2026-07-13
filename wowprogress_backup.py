@@ -307,7 +307,7 @@ def rows_from_wowprogress_backup_for_schedule_scan(config: JsonDict) -> tuple[li
         and normalise_region(item.get("region")) == own_region
         for item in output
     )
-    if include_own and own_guild and own_realm and own_region and own_rank is not None and not own_already_present:
+    if include_own and own_guild and own_realm and own_region and not own_already_present:
         output.append({
             "guild": configured_guild or (saved_profile.name if saved_profile else ""),
             "realm": configured_realm or (saved_profile.realm if saved_profile else ""),
@@ -340,5 +340,8 @@ def rows_from_wowprogress_backup_for_schedule_scan(config: JsonDict) -> tuple[li
         "own_guild": configured_guild or (saved_profile.name if saved_profile else ""),
         "own_realm": configured_realm or (saved_profile.realm if saved_profile else ""),
         "own_region": own_region,
+        "own_reference_added": bool(
+            include_own and own_guild and own_realm and own_region and not own_already_present
+        ),
     }
     return output, meta
