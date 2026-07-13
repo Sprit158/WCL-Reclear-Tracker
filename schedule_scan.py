@@ -21,6 +21,7 @@ from wowprogress_backup import find_wowprogress_backup_match, rows_from_wowprogr
 from schedule_database import (
     connect_schedule_db,
     get_cached_endboss_kill,
+    get_latest_cached_reports,
     get_cached_reports,
     get_schedule_result_statuses,
     replace_raid_nights,
@@ -165,6 +166,13 @@ def fetch_guild_reports_v2_cached(
         if reports is not None:
             debug_lines.append(f"{guild}-{realm}-{region} :: sqlite reports cache hit :: {len(reports)} reports")
             return reports, "sqlite_cache"
+        reports = get_latest_cached_reports(
+            conn, guild, realm, region, start_ms,
+            float(scan_cfg.get("report_list_cache_ttl_hours", 168)),
+        )
+        if reports is not None:
+            debug_lines.append(f"{guild}-{realm}-{region} :: fresh latest sqlite reports cache hit :: {len(reports)} reports")
+            return reports, "sqlite_cache_latest"
 
     # Legacy JSON cache migration/fallback from v1.6.1.
     path = cache_path_for_guild(config, guild, realm, region, start_ms, end_ms)
@@ -216,6 +224,13 @@ def load_cached_or_legacy_reports_main_thread(
         if reports is not None:
             debug_lines.append(f"{guild}-{realm}-{region} :: sqlite reports cache hit :: {len(reports)} reports")
             return reports, "sqlite_cache"
+        reports = get_latest_cached_reports(
+            conn, guild, realm, region, start_ms,
+            float(scan_cfg.get("report_list_cache_ttl_hours", 168)),
+        )
+        if reports is not None:
+            debug_lines.append(f"{guild}-{realm}-{region} :: fresh latest sqlite reports cache hit :: {len(reports)} reports")
+            return reports, "sqlite_cache_latest"
 
     path = cache_path_for_guild(config, guild, realm, region, start_ms, end_ms)
     if legacy_json_fallback and path.exists() and not force_refresh:
@@ -312,8 +327,13 @@ def classify_and_store_schedule_result(
             replace_raid_nights(conn, guild, realm, region, [])
             return backup_result
 
+    target_reports, unknown_reports, other_reports = filter_target_raid_reports(reports, config)
+    debug_lines.append(
+        f"{guild}-{realm}-{region} :: report zone filter target={len(target_reports)} "
+        f"unknown_excluded={len(unknown_reports)} other_excluded={len(other_reports)}"
+    )
     reports_for_schedule, excluded_after_cutoff, cutoff_date, cutoff_source = filter_reports_to_progression_cutoff(
-        conn, reports, row, config, debug_lines
+        conn, target_reports, row, config, debug_lines
     )
     nights = build_nights_from_reports(reports_for_schedule, config, tz_name)
     result = classify_schedule(
@@ -456,7 +476,14 @@ def backup_or_error_schedule_result(config: JsonDict, row: dict, error_text: str
             region=row["region"],
         )
         if match is not None:
-            return wowprogress_backup_schedule_result(row, match, f"WCL lookup/API failed: {error_text}", debug_lines)
+            result = wowprogress_backup_schedule_result(row, match, f"WCL lookup/API failed: {error_text}", debug_lines)
+            if config.get("comparison", {}).get("schedule_scan", {}).get("actual_schedule_verification_enabled", False):
+                result.is_likely_two_day = False
+                result.candidate_needs_deep_time_review = False
+                result.schedule_source = "wowprogress_backup_unverified_wcl_error"
+                result.schedule_confidence = "unverified"
+                result.reason = f"Could not verify actual raid days from WCL: {error_text}"
+            return result
 
     return error_schedule_result(row, error_text)
 
@@ -476,7 +503,14 @@ def backup_or_zero_reports_schedule_result(config: JsonDict, row: dict, debug_li
     if match is None:
         return None
 
-    return wowprogress_backup_schedule_result(row, match, "WCL returned 0 public reports", debug_lines)
+    result = wowprogress_backup_schedule_result(row, match, "WCL returned 0 public reports", debug_lines)
+    if config.get("comparison", {}).get("schedule_scan", {}).get("actual_schedule_verification_enabled", False):
+        result.is_likely_two_day = False
+        result.candidate_needs_deep_time_review = False
+        result.schedule_source = "wowprogress_backup_unverified_no_public_reports"
+        result.schedule_confidence = "unverified"
+        result.reason = "No public WCL reports were available, so actual raid days could not be verified."
+    return result
 
 def error_schedule_result(row: dict, error_text: str) -> ScheduleResult:
     return ScheduleResult(
@@ -861,15 +895,15 @@ def filter_target_raid_reports(
     return target, unknown, other
 
 
-def points_used_between(before: JsonDict, after: JsonDict) -> int | None:
+def points_used_between(before: JsonDict, after: JsonDict) -> float | None:
     try:
-        start = int(before.get("pointsSpentThisHour"))
-        end = int(after.get("pointsSpentThisHour"))
+        start = float(before.get("pointsSpentThisHour"))
+        end = float(after.get("pointsSpentThisHour"))
     except (TypeError, ValueError):
         return None
     if end < start:
         return None  # The hourly window reset during the test.
-    return end - start
+    return round(end - start, 2)
 
 
 def run_single_guild_schedule_test(
@@ -934,6 +968,17 @@ def run_single_guild_schedule_test(
         config=config,
         source="wcl_v2_single_guild_report_list_test",
     )
+    # Reuse everything collected by this test in the normal batch scan.
+    conn = connect_schedule_db(config)
+    try:
+        upsert_report_cache(
+            conn, guild, realm, region, start_ms, end_ms,
+            reports, "wcl_v2_single_guild_report_list_test",
+        )
+        upsert_schedule_result(conn, result)
+        replace_raid_nights(conn, guild, realm, region, nights)
+    finally:
+        conn.close()
     used = points_used_between(before, after)
     verdict = "YES - likely 2 days/week from available public logs" if result.is_likely_two_day else "NO - the available public logs do not match the 2-day thresholds"
 
@@ -958,6 +1003,7 @@ def run_single_guild_schedule_test(
         f"Points reset in: {after.get('pointsResetIn', 'unknown')}",
         "Point measurement uses WCL rate-limit probes immediately before and after the report-list request.",
         "This verifies the schedule visible in available public logs; missing/private logs can lower the measured days.",
+        "The report list, calculated schedule and raid nights were cached in SQLite for future runs.",
     ]
 
     output = Path("output/comparison/single_guild_schedule_test.txt")
@@ -1111,12 +1157,11 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
 
     logger.print("Schedule scan selected.")
     logger.print("Scanning declared 1-2 day guilds above you from the local WoWProgress backup list.")
-    logger.print("Default mode is declared-only and does not call WCL, so it uses 0 WCL tokens.")
+    logger.print("Actual schedule verification uses WCL report-list metadata only; detailed fights and events are not fetched.")
 
     backup_cfg = config.get("comparison", {}).get("wowprogress_backup", {})
-    declared_only_mode = bool(backup_cfg.get("declared_only_scan", False)) and not bool(
-        backup_cfg.get("wcl_enrichment_enabled", False)
-    )
+    verification_enabled = bool(scan_cfg.get("actual_schedule_verification_enabled", True))
+    declared_only_mode = not verification_enabled and bool(backup_cfg.get("declared_only_scan", False)) and not bool(backup_cfg.get("wcl_enrichment_enabled", False))
     parallel_enabled = bool(scan_cfg.get("parallel_schedule_scan", True))
     worker_count = max(1, int(scan_cfg.get("schedule_scan_workers", 4)))
     if declared_only_mode:
@@ -1136,6 +1181,8 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
 
     if declared_only_mode:
         logger.print("Declared-only mode rebuilds the complete eligible guild list each run.")
+    elif verification_enabled:
+        logger.print("Actual-verification mode reprocesses every eligible guild, using cached report lists whenever available.")
     else:
         guild_rows = filter_unprocessed_guild_rows(conn, config, guild_rows, logger)
     if not guild_rows:
@@ -1145,8 +1192,11 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
         return
 
     max_guilds = int(scan_cfg.get("max_guilds_per_run", 0))
-    selected_rows = guild_rows if max_guilds <= 0 else guild_rows[:max_guilds]
-    if max_guilds <= 0:
+    # Declared-only mode is a zero-WCL local operation, so legacy saved config
+    # limits must not truncate the complete above-own guild list.
+    process_all = verification_enabled or declared_only_mode or max_guilds <= 0
+    selected_rows = guild_rows if process_all else guild_rows[:max_guilds]
+    if process_all:
         logger.print(f"Processing all eligible guilds in this run: {len(selected_rows)}")
     else:
         logger.print(f"Processing this run's configured guild limit: {len(selected_rows)}/{len(guild_rows)}")
@@ -1163,7 +1213,7 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
     api_jobs: list[dict] = []
 
     backup_cfg = config.get("comparison", {}).get("wowprogress_backup", {})
-    declared_only_scan = bool(backup_cfg.get("declared_only_scan", False)) and not bool(backup_cfg.get("wcl_enrichment_enabled", False))
+    declared_only_scan = declared_only_mode
     backup_source_rows = bool(backup_cfg.get("use_as_schedule_scan_source", False)) or (
         scan_cfg.get("source_mode") == "wowprogress_backup_above_own_declared_1_2"
     )
@@ -1239,8 +1289,16 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
 
     # API pass. Workers fetch only; main thread stores cache/results.
     api_fetches = 0
+    rate_before: JsonDict = {}
+    rate_after: JsonDict = {}
+    meter_client = None
     if api_jobs:
         logger.print(f"WCL API fetches needed this run: {len(api_jobs)}")
+        try:
+            meter_client = build_v2_client(config)
+            rate_before = meter_client.test_query().get("data", {}).get("rateLimitData", {})
+        except Exception as exc:
+            logger.print(f"Could not read starting WCL point balance: {exc}")
     else:
         logger.print("No WCL API fetches needed; all selected guilds came from cache.")
 
@@ -1341,6 +1399,13 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
 
         save_client_token(client)
 
+    if api_jobs and meter_client is not None:
+        try:
+            rate_after = meter_client.test_query().get("data", {}).get("rateLimitData", {})
+            save_client_token(meter_client)
+        except Exception as exc:
+            logger.print(f"Could not read ending WCL point balance: {exc}")
+
     conn.close()
 
     # Keep output ordered by rank where possible, not by worker completion order.
@@ -1349,7 +1414,8 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
     write_schedule_results(output_file, results)
     Path(debug_file).parent.mkdir(parents=True, exist_ok=True)
     backup_matches = sum(1 for r in results if r.schedule_source == "wowprogress_screenshot_backup_declared_only")
-    public_wcl_measured = sum(1 for r in results if r.schedule_source != "wowprogress_screenshot_backup_declared_only" and r.schedule_confidence != "error")
+    public_wcl_measured = sum(1 for r in results if r.schedule_source == "wcl_report_list_candidate_filter")
+    unverified_count = sum(1 for r in results if r.schedule_confidence == "unverified")
     error_count = sum(1 for r in results if r.schedule_confidence == "error")
     debug_lines.append(
         f"RUN SUMMARY selected={len(selected_rows)} cache_hits={cache_hits} api_fetches={api_fetches} "
@@ -1363,7 +1429,13 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
     logger.print(f"Schedule scan debug: {debug_file}")
     logger.print(f"Cache hits this run: {cache_hits}")
     logger.print(f"WCL API fetches this run: {api_fetches}")
+    if rate_before or rate_after:
+        measured_points = points_used_between(rate_before, rate_after)
+        logger.print(f"WCL points before: {rate_before.get('pointsSpentThisHour', 'unknown')}")
+        logger.print(f"WCL points after: {rate_after.get('pointsSpentThisHour', 'unknown')}")
+        logger.print(f"WCL points used this run: {measured_points if measured_points is not None else 'unknown'}")
     logger.print(f"WoWProgress backup matches this run: {backup_matches}")
     logger.print(f"Public WCL results this run: {public_wcl_measured}")
+    logger.print(f"Guilds not verifiable from public WCL reports: {unverified_count}")
     logger.print(f"Errors with no backup this run: {error_count}")
     logger.print(f"Likely 2-day guilds in this run: {likely_count}/{len(results)}")
