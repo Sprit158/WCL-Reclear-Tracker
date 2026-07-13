@@ -9,7 +9,7 @@ import sys
 import shutil
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 APP_FOLDER_NAME = "WCLReclearTracker"
