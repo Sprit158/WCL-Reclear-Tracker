@@ -1,4 +1,5 @@
 To run the tracker, double-click START_WCL_RECLEAR_TRACKER.bat.
+v1.7.5 displays saved guilds in a compact table and adds first-month average raid days per week.
 v1.7.4 verifies actual raid nights for every eligible guild using cached WCL report-list metadata.
 v1.7.3 processes all eligible guilds up to your rank and adds a one-guild WCL schedule/point-cost test.
 v1.7.1 reduces the main launcher to six options and moves maintenance tools into one submenu.
