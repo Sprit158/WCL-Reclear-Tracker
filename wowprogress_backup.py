@@ -7,7 +7,7 @@ import csv
 import re
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 @dataclass(slots=True)
