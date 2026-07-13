@@ -6,6 +6,50 @@ from main import load_config_early
 from schedule_database import connect_schedule_db
 
 
+def table_cell(value, width: int, align: str = "left") -> str:
+    text = "-" if value is None or value == "" else str(value)
+    if len(text) > width:
+        text = text[: max(1, width - 1)] + "~"
+    return text.rjust(width) if align == "right" else text.ljust(width)
+
+
+def number_cell(value) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.2f}".rstrip("0").rstrip(".")
+
+
+def render_table(rows) -> str:
+    columns = [
+        ("Rank", "rank", 4, "right"),
+        ("Guild", "guild", 19, "left"),
+        ("Realm", "realm", 12, "left"),
+        ("Avg", "average_raid_days_per_active_week", 5, "right"),
+        ("M1", "first_month_average_raid_days", 5, "right"),
+        ("Med", "inferred_days_per_week", 5, "right"),
+        ("Hrs", "logged_window_hours_per_week", 5, "right"),
+        ("Wks", "active_weeks", 4, "right"),
+        ("Common days", "inferred_raid_days", 18, "left"),
+    ]
+    numeric = {
+        "average_raid_days_per_active_week",
+        "first_month_average_raid_days",
+        "inferred_days_per_week",
+        "logged_window_hours_per_week",
+    }
+    separator = "+" + "+".join("-" * (width + 2) for _, _, width, _ in columns) + "+"
+    header = "| " + " | ".join(table_cell(title, width) for title, _, width, _ in columns) + " |"
+    lines = [separator, header, separator]
+    for row in rows:
+        cells = []
+        for _, key, width, align in columns:
+            value = number_cell(row[key]) if key in numeric else row[key]
+            cells.append(table_cell(value, width, align))
+        lines.append("| " + " | ".join(cells) + " |")
+    lines.append(separator)
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Query cached schedule scan results from comparison.sqlite.")
     parser.add_argument("--two-day", action="store_true", help="Show likely 2-day guilds.")
@@ -42,6 +86,7 @@ def main() -> None:
             region,
             inferred_days_per_week,
             average_raid_days_per_active_week,
+            first_month_average_raid_days,
             logged_window_hours_per_week,
             inferred_hours_per_week,
             inferred_raid_days,
@@ -64,16 +109,11 @@ def main() -> None:
         print("No cached schedule results matched.")
         return
 
-    for row in rows:
-        print(
-            f"#{row['rank']} {row['guild']}-{row['realm']}-{row['region']} | "
-            f"{row['average_raid_days_per_active_week']} avg days/wk | "
-            f"{row['inferred_days_per_week']} median nights/wk | "
-            f"{row['logged_window_hours_per_week']} logged-window h/wk | "
-            f"{row['inferred_raid_days']} | "
-            f"two_day={bool(row['is_likely_two_day'])} | "
-            f"{row['reason']}"
-        )
+    print(render_table(rows))
+    print()
+    print("Avg/wk = average raid days per active week")
+    print("M1/wk  = average raid days across the first four reset weeks (zero-night weeks included)")
+    print("Med/wk = median raid nights per active week; Hours = median logged-window hours per week")
 
     conn.close()
 
