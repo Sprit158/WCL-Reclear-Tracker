@@ -22,6 +22,8 @@ Version 1.7.4 enables that metadata verification for the full eligible guild lis
 
 Version 1.7.5 renders saved likely two-day guilds as a compact console table. It also stores `first_month_average_raid_days`, calculated across the first four reset weeks from the configured season start with zero-night weeks included.
 
+Version 1.7.6 infers recurring core raid weekdays across active weeks, then adds non-core overtime dates to the displayed average. Short target-raid sessions of at least 15 minutes now count as raid days, preventing short farm or kill logs from incorrectly pulling a two-day guild below two days per week.
+
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
 ## Privacy
