@@ -58,6 +58,9 @@ def main() -> None:
         ("Cheap candidate filter mode", "candidate_needs_deep_time_review" in Path("schedule_scan.py").read_text(encoding="utf-8")),
         ("v1.6.20 query import", "from main import load_config_early" in Path("query_schedule_cache.py").read_text(encoding="utf-8")),
         ("Option 13 client-order fix", Path("main.py").read_text(encoding="utf-8").find("if args.test_v2_reports") > Path("main.py").read_text(encoding="utf-8").find("client = WCLClient")),
+        ("GitHub updater present", Path("updater.py").exists() and "releases/latest" in Path("updater.py").read_text(encoding="utf-8")),
+        ("Launcher update option", "Check for and install updates" in Path("START_WCL_RECLEAR_TRACKER.bat").read_text(encoding="utf-8")),
+        ("Updater preserves local guild data", "data/wowprogress_1_2_day_backup.csv" in Path("updater.py").read_text(encoding="utf-8") and "comparison_guilds.csv" in Path("updater.py").read_text(encoding="utf-8")),
     ]
 
     failed = [name for name, ok in checks if not ok]
