@@ -108,6 +108,13 @@ def init_schedule_db(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (guild_key, season_start_ms, season_end_ms)
         );
 
+        CREATE TABLE IF NOT EXISTS schedule_report_fight_cache (
+            report_code TEXT PRIMARY KEY,
+            contains_mythic_boss_fight INTEGER NOT NULL,
+            fights_json TEXT NOT NULL,
+            fetched_at_unix INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS schedule_scan_results (
             guild_key TEXT PRIMARY KEY,
             guild TEXT NOT NULL,
@@ -185,6 +192,54 @@ def init_schedule_db(conn: sqlite3.Connection) -> None:
         """
     )
     run_schema_migrations(conn)
+    conn.commit()
+
+
+def get_cached_report_fight_summary(conn: sqlite3.Connection, report_code: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT contains_mythic_boss_fight, fights_json, fetched_at_unix
+        FROM schedule_report_fight_cache
+        WHERE report_code = ?
+        """,
+        (report_code,),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        fights = json.loads(row["fights_json"])
+    except (TypeError, json.JSONDecodeError):
+        fights = []
+    return {
+        "contains_mythic_boss_fight": bool(row["contains_mythic_boss_fight"]),
+        "fights": fights,
+        "fetched_at_unix": int(row["fetched_at_unix"]),
+    }
+
+
+def upsert_report_fight_summary(
+    conn: sqlite3.Connection,
+    report_code: str,
+    fights: list[JsonDict],
+    contains_mythic_boss_fight: bool,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO schedule_report_fight_cache (
+            report_code, contains_mythic_boss_fight, fights_json, fetched_at_unix
+        ) VALUES (?, ?, ?, ?)
+        ON CONFLICT(report_code) DO UPDATE SET
+            contains_mythic_boss_fight = excluded.contains_mythic_boss_fight,
+            fights_json = excluded.fights_json,
+            fetched_at_unix = excluded.fetched_at_unix
+        """,
+        (
+            report_code,
+            int(contains_mythic_boss_fight),
+            json.dumps(fights, separators=(",", ":")),
+            int(time.time()),
+        ),
+    )
     conn.commit()
 
 
