@@ -32,7 +32,7 @@ from schedule_database import (
 )
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -1203,4 +1203,3 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
     logger.print(f"Public WCL results this run: {public_wcl_measured}")
     logger.print(f"Errors with no backup this run: {error_count}")
     logger.print(f"Likely 2-day guilds in this run: {likely_count}/{len(results)}")
-
