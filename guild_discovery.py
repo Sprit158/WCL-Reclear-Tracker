@@ -15,7 +15,7 @@ import requests
 from schedule_database import connect_schedule_db, get_cached_discovered_guilds, upsert_discovery_cache
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 @dataclass(slots=True)
