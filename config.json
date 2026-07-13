@@ -26,7 +26,7 @@
     "location": "global_app_data"
   },
   "api_mode": "v1_api_key",
-  "version": "1.6.20",
+  "version": "1.7.2",
   "logs": {
     "enabled": true,
     "folder": "logs",
@@ -99,11 +99,17 @@
     "max_same_night_gap_minutes": 90,
     "max_raid_night_span_hours": 8,
     "overlap_tolerance_minutes": 10,
-    "inspect_all_reports_before_zone_filter": true,
+    "inspect_all_reports_before_zone_filter": false,
     "select_reports_by_actual_boss_pulls": true,
     "write_report_audit": true,
     "tracked_bosses_must_have_pulls": true,
-    "write_report_boss_audit": true
+    "write_report_boss_audit": true,
+    "metadata_first": {
+      "enabled": true,
+      "max_sessions_per_date": 1,
+      "max_reports_per_date": 4,
+      "note": "Uses cheap report-list metadata to shortlist raid-night reports before requesting detailed fights. Cached details remain usable at zero API-point cost."
+    }
   },
   "manual_reports_fallback": true,
   "boss_filter": {
