@@ -1293,7 +1293,9 @@ def rows_from_discovery(config: JsonDict, logger, conn=None) -> list[dict]:
                 f"{meta.get('own_realm') or 'not set'}-{meta.get('own_region') or 'not set'}"
             )
             logger.print(f"Own WoWProgress rank used: {meta.get('own_rank')}")
-            logger.print(f"Declared 1-2 day guilds selected above own: {meta.get('selected')}")
+            logger.print(f"Schedule rows selected, including your guild: {meta.get('selected')}")
+            if meta.get("own_reference_added"):
+                logger.print("Your saved guild was added as a reference row even though it was absent from the backup CSV.")
             if meta.get("region_filter"):
                 logger.print(f"Region filter: {meta.get('region_filter')}")
             else:
