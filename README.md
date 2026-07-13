@@ -12,6 +12,10 @@ The main launcher automatically asks for and saves missing guild and Warcraft Lo
 
 Choose **5. Check for and install updates** from the launcher menu. Updates are downloaded from this repository and applied in place while preserving local guild data and settings.
 
+Version 1.7.2 uses a metadata-first report pass. It filters known unrelated zones and duplicate report sessions before downloading detailed fight summaries, while continuing to reuse all cached report details at zero additional API-point cost.
+
+The local WoWProgress backup is copied to the persistent app-data folder the first time it is found. If a newly unpacked version is missing it, the app can recover the CSV from an older adjacent version automatically.
+
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
 ## Privacy
