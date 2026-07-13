@@ -20,6 +20,8 @@ Version 1.7.3 processes every eligible guild above the saved guild rank instead 
 
 Version 1.7.4 enables that metadata verification for the full eligible guild list. Raw report lists, calculated schedule summaries and individual raid nights are stored in SQLite; fresh report lists are reused for seven days, and each batch displays its measured WCL point cost.
 
+Version 1.7.5 renders saved likely two-day guilds as a compact console table. It also stores `first_month_average_raid_days`, calculated across the first four reset weeks from the configured season start with zero-night weeks included.
+
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
 ## Privacy
