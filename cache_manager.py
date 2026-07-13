@@ -6,8 +6,8 @@ from typing import Any, Callable
 import json
 
 
-type JsonDict = dict[str, Any]
-type FetchReportFunc = Callable[[str], JsonDict]
+JsonDict = dict[str, Any]
+FetchReportFunc = Callable[[str], JsonDict]
 
 
 class CacheError(Exception):
