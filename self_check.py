@@ -75,6 +75,7 @@ def main() -> None:
         ("Seven-day report-list cache", '"report_list_cache_ttl_hours": 168' in config_text),
         ("Readable saved-guild table", "def render_table" in Path("query_schedule_cache.py").read_text(encoding="utf-8") and "M1/wk" in Path("query_schedule_cache.py").read_text(encoding="utf-8")),
         ("First-month raid-day average", Path("schedule_scan.py").read_text(encoding="utf-8").count("first_month_average_raid_days") >= 4 and "first_month_average_raid_days" in Path("schedule_database.py").read_text(encoding="utf-8")),
+        ("Core-days plus overtime algorithm", "estimated_avg_nights" in Path("schedule_scan.py").read_text(encoding="utf-8") and "overtime_nights" in Path("schedule_scan.py").read_text(encoding="utf-8") and '"minimum_counted_raid_day_minutes": 15' in config_text),
     ]
 
     failed = [name for name, ok in checks if not ok]
