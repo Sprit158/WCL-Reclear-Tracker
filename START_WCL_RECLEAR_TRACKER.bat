@@ -1,5 +1,5 @@
 @echo off
-title WCL Reclear Tracker v1.6.22
+title WCL Reclear Tracker v1.7.0
 
 rem Find a working Python command. The standard Windows installer often
 rem provides "py" without adding "python" to PATH.
@@ -21,7 +21,7 @@ if not defined PYTHON_CMD goto nopython
 
 :menu
 cls
-echo WCL Reclear Tracker v1.6.22
+echo WCL Reclear Tracker v1.7.0
 echo.
 echo 1. Run tracker using saved/configured guild
 echo 2. Run tracker with guild entered now
@@ -40,7 +40,8 @@ echo 14. Test guild discovery only
 echo 15. Schedule scan only
 echo 16. Show cached likely 2-day guilds
 echo 17. Test WoWProgress 1-2 raids/week
-echo 18. Exit
+echo 18. Check for and install updates
+echo 19. Exit
 echo.
 set /p choice=Choose an option: 
 
@@ -61,7 +62,8 @@ if "%choice%"=="14" goto testdiscovery
 if "%choice%"=="15" goto schedulescan
 if "%choice%"=="16" goto querytwoday
 if "%choice%"=="17" goto testwowprogress
-if "%choice%"=="18" goto end
+if "%choice%"=="18" goto update
+if "%choice%"=="19" goto end
 
 echo.
 echo Invalid option.
@@ -216,6 +218,22 @@ echo.
 echo Finished. Press any key to return to menu.
 pause >nul
 goto menu
+
+:update
+cls
+%PYTHON_CMD% updater.py
+if errorlevel 10 goto updated
+echo.
+echo Finished. Press any key to return to menu.
+pause >nul
+goto menu
+
+:updated
+echo.
+echo Update installed. Press any key to close the tracker.
+echo Then reopen START_WCL_RECLEAR_TRACKER.bat to use the new version.
+pause >nul
+exit
 
 :end
 exit
