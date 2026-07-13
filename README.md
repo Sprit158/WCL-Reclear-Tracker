@@ -22,7 +22,7 @@ Version 1.7.4 enables that metadata verification for the full eligible guild lis
 
 Version 1.7.5 renders saved likely two-day guilds as a compact console table. It also stores `first_month_average_raid_days`, calculated across the first four reset weeks from the configured season start with zero-night weeks included.
 
-Version 1.7.6 infers recurring core raid weekdays across active weeks, then adds non-core overtime dates to the displayed average. Short target-raid sessions of at least 15 minutes now count as raid days, preventing short farm or kill logs from incorrectly pulling a two-day guild below two days per week.
+Version 1.7.6 uses adaptive weekday recurrence to separate stable core raid days from progression overtime. It recognises one-, two- and three-day schedules, lowers confidence when several weekdays are tied by a rotating or changed schedule, and displays recurring core days plus overtime per active week. Any-length report containing a Mythic boss fight counts as a raid day; fight summaries are fetched only for otherwise-too-short reports and are then cached permanently. The saved guild is included in the comparison table and marked `(you)`.
 
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
