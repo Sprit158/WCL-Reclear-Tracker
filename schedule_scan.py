@@ -9,6 +9,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 import csv
 import json
+import math
 import re
 import time
 
@@ -21,6 +22,7 @@ from wowprogress_backup import find_wowprogress_backup_match, rows_from_wowprogr
 from schedule_database import (
     connect_schedule_db,
     get_cached_endboss_kill,
+    get_cached_report_fight_summary,
     get_latest_cached_reports,
     get_cached_reports,
     get_schedule_result_statuses,
@@ -28,6 +30,7 @@ from schedule_database import (
     should_skip_existing_schedule_result,
     upsert_discovered_guilds,
     upsert_endboss_kill_cache,
+    upsert_report_fight_summary,
     upsert_report_cache,
     upsert_schedule_result,
 )
@@ -85,6 +88,17 @@ class ScheduleFetchJobResult:
     fetched_from_api: bool
     error: str | None
     debug_lines: list[str]
+
+
+@dataclass(slots=True)
+class CoreScheduleAnalysis:
+    core_days: list[str]
+    coverage_by_day: dict[str, float]
+    overtime_nights: int
+    estimated_average: float
+    ambiguous: bool
+    confidence: str
+    explanation: str
 
 
 def slugify(value: str) -> str:
@@ -336,6 +350,7 @@ def classify_and_store_schedule_result(
     reports_for_schedule, excluded_after_cutoff, cutoff_date, cutoff_source = filter_reports_to_progression_cutoff(
         conn, target_reports, row, config, debug_lines
     )
+    hydrate_short_report_mythic_evidence(conn, reports_for_schedule, config, debug_lines)
     nights = build_nights_from_reports(reports_for_schedule, config, tz_name)
     result = classify_schedule(
         guild=guild,
@@ -558,6 +573,79 @@ def report_is_evening_candidate(report: JsonDict, config: JsonDict, tz_name: str
     return True
 
 
+def report_contains_mythic_boss_fight(report: JsonDict) -> bool:
+    if bool(report.get("contains_mythic_boss_fight", False)):
+        return True
+    return any(
+        int(fight.get("difficulty") or 0) == 5 and bool(fight.get("encounterID"))
+        for fight in report.get("fights", [])
+        if isinstance(fight, dict)
+    )
+
+
+def hydrate_short_report_mythic_evidence(
+    conn,
+    reports: list[JsonDict],
+    config: JsonDict,
+    debug_lines: list[str],
+) -> None:
+    """Inspect only reports that duration filtering would otherwise discard.
+
+    Fight summaries are immutable after a WCL report is complete, so cache them
+    permanently by report code. This makes subsequent scans use zero WCL points
+    for the same short reports while preserving genuine short Mythic raid nights.
+    """
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    minimum_ms = int(scan_cfg.get("minimum_counted_raid_day_minutes", 15)) * 60 * 1000
+    short_reports = [
+        report for report in reports
+        if report_code(report)
+        and report_start(report)
+        and report_end(report) > report_start(report)
+        and report_end(report) - report_start(report) < minimum_ms
+    ]
+    if not short_reports:
+        return
+
+    client = None
+    fetched = 0
+    cache_hits = 0
+    for report in short_reports:
+        code = report_code(report)
+        cached = get_cached_report_fight_summary(conn, code)
+        if cached is not None:
+            report["fights"] = cached["fights"]
+            report["contains_mythic_boss_fight"] = cached["contains_mythic_boss_fight"]
+            cache_hits += 1
+            continue
+
+        try:
+            if client is None:
+                client = build_v2_client(config)
+            data = client.fetch_report_fights(code)
+            fights = data.get("fights", [])
+            contains_mythic = any(
+                int(fight.get("difficulty") or 0) == 5 and bool(fight.get("encounterID"))
+                for fight in fights
+                if isinstance(fight, dict)
+            )
+            report["fights"] = fights
+            report["contains_mythic_boss_fight"] = contains_mythic
+            upsert_report_fight_summary(conn, code, fights, contains_mythic)
+            fetched += 1
+        except Exception as e:
+            debug_lines.append(
+                f"short report fight check failed report={code} :: {type(e).__name__}: {e}"
+            )
+
+    if client is not None:
+        save_client_token(client)
+    debug_lines.append(
+        f"short report mythic checks :: reports={len(short_reports)} cache_hits={cache_hits} "
+        f"wcl_fetches={fetched}"
+    )
+
+
 def report_date_utc_from_ms(ms: int | None) -> str:
     if not ms:
         return ""
@@ -622,7 +710,18 @@ def find_endboss_kill_from_wcl_reports(
             continue
 
         report_start_ms = int(data.get("startTime") or report_start(report) or 0)
-        for fight in data.get("fights", []):
+        fights = data.get("fights", [])
+        upsert_report_fight_summary(
+            conn,
+            code,
+            fights,
+            any(
+                int(fight.get("difficulty") or 0) == 5 and bool(fight.get("encounterID"))
+                for fight in fights
+                if isinstance(fight, dict)
+            ),
+        )
+        for fight in fights:
             if is_endboss_kill_fight(fight, config):
                 kill_ms = absolute_fight_time_ms(report_start_ms, int(fight.get("endTime") or 0))
                 kill_date = report_date_utc_from_ms(kill_ms)
@@ -720,7 +819,10 @@ def build_nights_from_reports(reports: list[JsonDict], config: JsonDict, tz_name
         end_ms = max(ends)
         span_ms = end_ms - start_ms
 
-        if span_ms < min_span_ms:
+        # Any report containing a Mythic boss fight proves this was a raid day,
+        # even if the logger started late or the report lasted only a few minutes.
+        has_mythic_fight = any(report_contains_mythic_boss_fight(r) for r in items)
+        if span_ms < min_span_ms and not has_mythic_fight:
             continue
 
         if span_ms > max_span_ms:
@@ -746,6 +848,130 @@ def build_nights_from_reports(reports: list[JsonDict], config: JsonDict, tz_name
         )
 
     return nights
+
+
+def infer_core_raid_days(
+    nights: list[NightSummary],
+    active_weeks: int,
+    median_nights_per_week: float,
+    config: JsonDict,
+) -> CoreScheduleAnalysis:
+    """Infer a stable weekly schedule without treating occasional overtime as a core day.
+
+    Weekday support is based on distinct reset weeks, not report count. The second
+    core day uses an adaptive threshold relative to the guild's strongest day.
+    Third and later days require stronger recurrence *and* a matching weekly
+    median. Close, competing weekdays are reported as ambiguous (often a schedule
+    change or rotating raid night) instead of forcing a confident answer.
+    """
+    ordered_days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    day_order = {day: index for index, day in enumerate(ordered_days)}
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+
+    day_weeks: dict[str, set[str]] = {day: set() for day in ordered_days}
+    for night in nights:
+        day_weeks.setdefault(night.weekday, set()).add(night.week_start)
+
+    coverage = {
+        day: (len(day_weeks.get(day, set())) / active_weeks if active_weeks else 0.0)
+        for day in ordered_days
+    }
+    ranked_days = sorted(
+        ordered_days,
+        key=lambda day: (-coverage[day], day_order[day]),
+    )
+
+    minimum_coverage = float(scan_cfg.get("core_day_min_coverage", 0.35))
+    second_min_coverage = float(scan_cfg.get("second_core_day_min_coverage", 0.45))
+    second_relative = float(scan_cfg.get("second_core_day_relative_to_strongest", 0.60))
+    extra_min_coverage = float(scan_cfg.get("extra_core_day_min_coverage", 0.60))
+    extra_relative = float(scan_cfg.get("extra_core_day_relative_to_strongest", 0.75))
+    ambiguity_gap = float(scan_cfg.get("core_day_ambiguity_gap", 0.12))
+    minimum_occurrences = max(2, math.ceil(active_weeks * minimum_coverage))
+
+    strongest = coverage[ranked_days[0]] if ranked_days else 0.0
+    core_days_ranked: list[str] = []
+    if ranked_days and len(day_weeks[ranked_days[0]]) >= minimum_occurrences:
+        core_days_ranked.append(ranked_days[0])
+
+    if len(ranked_days) > 1 and core_days_ranked and median_nights_per_week >= 1.5:
+        second = ranked_days[1]
+        second_threshold = max(second_min_coverage, strongest * second_relative)
+        if len(day_weeks[second]) >= minimum_occurrences and coverage[second] >= second_threshold:
+            core_days_ranked.append(second)
+
+    # Three- and four-day guilds must look like three-/four-day guilds in a
+    # typical week. This prevents a late progression push from becoming a core day.
+    for day in ranked_days[2:]:
+        required_weekly_median = len(core_days_ranked) + 0.5
+        extra_threshold = max(extra_min_coverage, strongest * extra_relative)
+        if (
+            core_days_ranked
+            and median_nights_per_week >= required_weekly_median
+            and len(day_weeks[day]) >= minimum_occurrences
+            and coverage[day] >= extra_threshold
+        ):
+            core_days_ranked.append(day)
+        else:
+            break
+
+    ambiguous = False
+    competing_day = ""
+    if len(core_days_ranked) >= 2 and len(ranked_days) > len(core_days_ranked):
+        last_core = core_days_ranked[-1]
+        next_day = ranked_days[len(core_days_ranked)]
+        if (
+            coverage[next_day] >= minimum_coverage
+            and coverage[last_core] - coverage[next_day] <= ambiguity_gap
+        ):
+            ambiguous = True
+            competing_day = next_day
+
+    core_day_set = set(core_days_ranked)
+    overtime_nights = sum(1 for night in nights if night.weekday not in core_day_set)
+    observed_average = round(len(nights) / active_weeks, 2) if active_weeks else 0.0
+    estimated_average = (
+        round(len(core_days_ranked) + overtime_nights / active_weeks, 2)
+        if core_days_ranked and active_weeks
+        else observed_average
+    )
+    # If several weekdays are tied, we cannot safely label the others overtime.
+    # Keep the honest observed value until the pattern becomes stable.
+    if ambiguous:
+        estimated_average = observed_average
+
+    min_active_weeks = int(scan_cfg.get("minimum_active_weeks", 4))
+    core_coverages = [coverage[day] for day in core_days_ranked]
+    if active_weeks < min_active_weeks or ambiguous or not core_days_ranked:
+        confidence = "low"
+    elif active_weeks >= 8 and core_coverages and min(core_coverages) >= 0.70:
+        confidence = "high"
+    else:
+        confidence = "medium"
+
+    coverage_text = ", ".join(
+        f"{day} {len(day_weeks[day])}/{active_weeks}"
+        for day in ranked_days
+        if day_weeks[day]
+    )
+    if ambiguous:
+        explanation = (
+            f"Weekday pattern is ambiguous: {competing_day} recurs almost as often as the "
+            f"least-supported selected day. This may be a schedule change or rotating day. "
+            f"Week support: {coverage_text}."
+        )
+    else:
+        explanation = f"Week support: {coverage_text}."
+
+    return CoreScheduleAnalysis(
+        core_days=sorted(core_days_ranked, key=lambda day: day_order[day]),
+        coverage_by_day=coverage,
+        overtime_nights=overtime_nights,
+        estimated_average=estimated_average,
+        ambiguous=ambiguous,
+        confidence=confidence,
+        explanation=explanation,
+    )
 
 
 def classify_schedule(
@@ -793,7 +1019,7 @@ def classify_schedule(
             schedule_confidence="none",
             reason="No report-list raid-night candidates passed the cheap first-pass filters.",
             example_nights="",
-            notes=f"report_source={source}; progression_cutoff={progression_cutoff_date or 'none'}; excluded_after_cutoff={reports_after_cutoff_excluded}; cheap report-list candidate scan only; no fight summaries fetched",
+            notes=f"report_source={source}; progression_cutoff={progression_cutoff_date or 'none'}; excluded_after_cutoff={reports_after_cutoff_excluded}; report-list candidate scan; short-report Mythic fight evidence checked when needed",
         )
 
     weekly_nights = [len(items) for items in by_week.values()]
@@ -818,24 +1044,11 @@ def classify_schedule(
     }
     first_month_avg_days = round(len(first_month_night_dates) / 4, 2)
 
-    day_counts: dict[str, int] = {}
-    day_weeks: dict[str, set[str]] = {}
-    for night in nights:
-        day_counts[night.weekday] = day_counts.get(night.weekday, 0) + 1
-        day_weeks.setdefault(night.weekday, set()).add(night.week_start)
-
-    ordered_days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    core_fraction = float(scan_cfg.get("core_raid_day_min_active_week_fraction", 0.55))
-    core_days = [
-        day for day in ordered_days
-        if len(day_weeks.get(day, set())) / active_weeks >= core_fraction
-    ]
+    core_analysis = infer_core_raid_days(nights, active_weeks, med_nights, config)
+    core_days = core_analysis.core_days
     inferred_days = ", ".join(core_days)
-    core_day_set = set(core_days)
-    overtime_nights = [night for night in nights if night.weekday not in core_day_set]
-    estimated_avg_nights = round(len(core_days) + len(overtime_nights) / active_weeks, 2)
-    if not core_days:
-        estimated_avg_nights = observed_avg_nights
+    overtime_nights = core_analysis.overtime_nights
+    estimated_avg_nights = core_analysis.estimated_average
 
     min_active_weeks = int(scan_cfg.get("minimum_active_weeks", 4))
     min_nights = float(scan_cfg.get("candidate_two_day_min_nights_per_week", 1.5))
@@ -846,6 +1059,7 @@ def classify_schedule(
     is_likely_two = (
         active_weeks >= min_active_weeks
         and len(core_days) == 2
+        and not core_analysis.ambiguous
         and med_nights >= min_nights
         and med_hours >= min_hours
     )
@@ -853,20 +1067,27 @@ def classify_schedule(
     if active_weeks < min_active_weeks:
         confidence = "low"
         reason = f"Only {active_weeks} active weeks found; minimum is {min_active_weeks}."
+    elif core_analysis.ambiguous:
+        confidence = "low"
+        reason = (
+            f"{core_analysis.explanation} Estimated {estimated_avg_nights:g} days/week; "
+            f"observed average {observed_avg_nights:g} and median {med_nights:g} nights/week."
+        )
     elif is_likely_two:
-        confidence = "medium"
+        confidence = core_analysis.confidence
         reason = (
             f"Core days {inferred_days}; estimated {estimated_avg_nights:g} days/week including "
-            f"{len(overtime_nights)} overtime day(s) across {active_weeks} active weeks. "
+            f"{overtime_nights} overtime day(s) across {active_weeks} active weeks. "
             f"Observed average {observed_avg_nights:g}; median {med_nights:g} nights/week and "
-            f"{med_hours:g} logged-window hours/week."
+            f"{med_hours:g} logged-window hours/week. {core_analysis.explanation}"
         )
     else:
-        confidence = "medium"
+        confidence = core_analysis.confidence
         reason = (
             f"Detected {len(core_days)} recurring core day(s) ({inferred_days or 'none'}); "
             f"estimated {estimated_avg_nights:g} days/week including overtime, observed average "
-            f"{observed_avg_nights:g}, median {med_nights:g} nights/week and {med_hours:g} logged-window hours/week."
+            f"{observed_avg_nights:g}, median {med_nights:g} nights/week and {med_hours:g} logged-window hours/week. "
+            f"{core_analysis.explanation}"
         )
 
     examples = []
@@ -898,7 +1119,7 @@ def classify_schedule(
         schedule_confidence=confidence,
         reason=reason,
         example_nights=" | ".join(examples),
-        notes=f"report_source={source}; progression_cutoff={progression_cutoff_date or 'none'}; excluded_after_cutoff={reports_after_cutoff_excluded}; cheap report-list candidate scan only; no fight summaries fetched",
+        notes=f"report_source={source}; progression_cutoff={progression_cutoff_date or 'none'}; excluded_after_cutoff={reports_after_cutoff_excluded}; report-list candidate scan; fight summaries fetched and cached only for otherwise-too-short reports",
         first_month_average_raid_days=first_month_avg_days,
     )
 
@@ -966,7 +1187,7 @@ def run_single_guild_schedule_test(
     start_ms, end_ms = season_range_ms(config.get("season", {}))
     tz_name = config.get("season", {}).get("timezone", "Europe/London")
     logger.print(f"One-guild schedule and WCL point-cost test: {guild}-{realm}-{region}")
-    logger.print("This fetches report-list metadata only; it does not fetch detailed fights or events.")
+    logger.print("This fetches report-list metadata plus cached fight summaries only for otherwise-too-short reports.")
 
     try:
         client = build_v2_client(config)
@@ -983,9 +1204,6 @@ def run_single_guild_schedule_test(
             max_pages=20,
         )
 
-        after_payload = client.test_query()
-        after = after_payload.get("data", {}).get("rateLimitData", {})
-        save_client_token(client)
     except (SettingsError, WCLV2ApiError) as exc:
         logger.print(f"One-guild schedule test failed: {exc}")
         logger.print("Use Settings and maintenance to set up/test the WCL v2 Client ID and Secret.")
@@ -993,20 +1211,22 @@ def run_single_guild_schedule_test(
 
     reports = v2_reports_to_v1_meta(reports_raw)
     target_reports, unknown_reports, other_reports = filter_target_raid_reports(reports, config)
-    nights = build_nights_from_reports(target_reports, config, tz_name)
-    result = classify_schedule(
-        guild=guild,
-        realm=realm,
-        region=region,
-        rank=None,
-        reports=target_reports,
-        nights=nights,
-        config=config,
-        source="wcl_v2_single_guild_report_list_test",
-    )
     # Reuse everything collected by this test in the normal batch scan.
     conn = connect_schedule_db(config)
     try:
+        short_debug: list[str] = []
+        hydrate_short_report_mythic_evidence(conn, target_reports, config, short_debug)
+        nights = build_nights_from_reports(target_reports, config, tz_name)
+        result = classify_schedule(
+            guild=guild,
+            realm=realm,
+            region=region,
+            rank=None,
+            reports=target_reports,
+            nights=nights,
+            config=config,
+            source="wcl_v2_single_guild_report_list_test",
+        )
         upsert_report_cache(
             conn, guild, realm, region, start_ms, end_ms,
             reports, "wcl_v2_single_guild_report_list_test",
@@ -1015,6 +1235,9 @@ def run_single_guild_schedule_test(
         replace_raid_nights(conn, guild, realm, region, nights)
     finally:
         conn.close()
+    after_payload = client.test_query()
+    after = after_payload.get("data", {}).get("rateLimitData", {})
+    save_client_token(client)
     used = points_used_between(before, after)
     verdict = "YES - likely 2 days/week from available public logs" if result.is_likely_two_day else "NO - the available public logs do not match the 2-day thresholds"
 
@@ -1194,8 +1417,8 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
         return
 
     logger.print("Schedule scan selected.")
-    logger.print("Scanning declared 1-2 day guilds above you from the local WoWProgress backup list.")
-    logger.print("Actual schedule verification uses WCL report-list metadata only; detailed fights and events are not fetched.")
+    logger.print("Scanning your guild plus declared 1-2 day guilds above you from the local WoWProgress backup list.")
+    logger.print("Schedule verification uses WCL report lists; only otherwise-too-short reports need a cached fight-summary check.")
 
     backup_cfg = config.get("comparison", {}).get("wowprogress_backup", {})
     verification_enabled = bool(scan_cfg.get("actual_schedule_verification_enabled", True))
@@ -1289,6 +1512,17 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
         logger.print(f"Likely 2-day guilds in this run: {len(results)}/{len(results)}")
         return
 
+    # Measure the whole verification pass, including the rare short-report fight
+    # checks that may be needed even when every report list came from cache.
+    rate_before: JsonDict = {}
+    rate_after: JsonDict = {}
+    meter_client = None
+    try:
+        meter_client = build_v2_client(config)
+        rate_before = meter_client.test_query().get("data", {}).get("rateLimitData", {})
+    except Exception as exc:
+        logger.print(f"Could not read starting WCL point balance: {exc}")
+
     # Main thread cache pass. This avoids sending cached guilds to workers.
     for row in selected_rows:
         guild = row["guild"]
@@ -1327,18 +1561,10 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
 
     # API pass. Workers fetch only; main thread stores cache/results.
     api_fetches = 0
-    rate_before: JsonDict = {}
-    rate_after: JsonDict = {}
-    meter_client = None
     if api_jobs:
         logger.print(f"WCL API fetches needed this run: {len(api_jobs)}")
-        try:
-            meter_client = build_v2_client(config)
-            rate_before = meter_client.test_query().get("data", {}).get("rateLimitData", {})
-        except Exception as exc:
-            logger.print(f"Could not read starting WCL point balance: {exc}")
     else:
-        logger.print("No WCL API fetches needed; all selected guilds came from cache.")
+        logger.print("No report-list fetches needed; all selected guild report lists came from cache.")
 
     if api_jobs and parallel_enabled and worker_count > 1:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -1437,7 +1663,7 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
 
         save_client_token(client)
 
-    if api_jobs and meter_client is not None:
+    if meter_client is not None:
         try:
             rate_after = meter_client.test_query().get("data", {}).get("rateLimitData", {})
             save_client_token(meter_client)
