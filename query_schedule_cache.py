@@ -122,9 +122,24 @@ def main() -> None:
 
     if not rows:
         print("No cached schedule results matched.")
+        if own_profile:
+            print("Your saved guild is not in the schedule cache. Run option 2 to add and scan it.")
+        conn.close()
         return
 
+    own_row_present = bool(
+        own_profile and any(
+            str(row["guild"]).strip().lower() == own_profile.name.strip().lower()
+            and str(row["realm"]).strip().lower() == own_profile.realm.strip().lower()
+            and str(row["region"]).strip().upper() == own_profile.region.strip().upper()
+            for row in rows
+        )
+    )
+
     print(render_table(rows, own_profile))
+    if own_profile and not own_row_present:
+        print()
+        print("NOTE: Your saved guild is missing from the schedule cache. Run option 2 to add and scan it.")
     print()
     print("Avg/wk = recurring core raid days plus overtime days divided by active weeks")
     print("        ambiguous/rotating schedules use their observed average instead of guessed overtime")
