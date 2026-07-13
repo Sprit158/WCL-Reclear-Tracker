@@ -178,12 +178,14 @@ def apply_release(release_root: Path) -> int:
         if not source.is_file():
             continue
         relative = source.relative_to(release_root)
-        if should_preserve(relative):
+        destination = APP_ROOT / relative
+        # Preserve personal files that already exist, but allow a personalised
+        # package to install a missing local dataset/configuration file.
+        if should_preserve(relative) and destination.exists():
             continue
         if relative == Path("config.json"):
             continue
 
-        destination = APP_ROOT / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         copied += 1
