@@ -64,8 +64,15 @@ def main() -> None:
         ("Metadata-first WCL request reduction", "shortlist_reports_for_deep_inspection" in Path("guild_fetcher.py").read_text(encoding="utf-8") and '"metadata_first"' in config_text),
         ("WoWProgress backup persists between versions", "global_backup_path" in Path("wowprogress_backup.py").read_text(encoding="utf-8") and "destination.exists()" in Path("updater.py").read_text(encoding="utf-8")),
         ("Schedule scan uses saved own guild", "get_guild_profile_from_settings" in Path("wowprogress_backup.py").read_text(encoding="utf-8") and "Own guild used" in Path("schedule_scan.py").read_text(encoding="utf-8")),
-        ("Schedule scan supports all eligible guilds", '"max_guilds_per_run": 0' in config_text and "max_guilds <= 0" in Path("schedule_scan.py").read_text(encoding="utf-8") and "rebuilds the complete eligible guild list" in Path("schedule_scan.py").read_text(encoding="utf-8")),
+        ("Schedule scan supports all eligible guilds", '"max_guilds_per_run": 0' in config_text and "process_all = verification_enabled or declared_only_mode or max_guilds <= 0" in Path("schedule_scan.py").read_text(encoding="utf-8") and "rebuilds the complete eligible guild list" in Path("schedule_scan.py").read_text(encoding="utf-8")),
         ("One-guild schedule point-cost test", "--test-schedule-guild" in main_text and "run_single_guild_schedule_test" in Path("schedule_scan.py").read_text(encoding="utf-8") and "Points used by test" in Path("schedule_scan.py").read_text(encoding="utf-8")),
+        ("WCL point test keeps decimal precision", "float(before.get" in Path("schedule_scan.py").read_text(encoding="utf-8") and "round(end - start, 2)" in Path("schedule_scan.py").read_text(encoding="utf-8")),
+        ("Actual schedules cached in SQLite", "get_latest_cached_reports" in Path("schedule_database.py").read_text(encoding="utf-8") and '"actual_schedule_verification_enabled": true' in config_text and "sqlite_cache_latest" in Path("schedule_scan.py").read_text(encoding="utf-8")),
+        ("Batch schedule zone filter", "filter_target_raid_reports(reports, config)" in Path("schedule_scan.py").read_text(encoding="utf-8")),
+        ("Batch WCL point meter", "WCL points used this run" in Path("schedule_scan.py").read_text(encoding="utf-8")),
+        ("One-guild test populates shared cache", "Reuse everything collected by this test" in Path("schedule_scan.py").read_text(encoding="utf-8") and "wcl_v2_single_guild_report_list_test" in Path("schedule_scan.py").read_text(encoding="utf-8")),
+        ("Missing WCL data stays unverified", "wowprogress_backup_unverified_no_public_reports" in Path("schedule_scan.py").read_text(encoding="utf-8") and "wowprogress_backup_unverified_wcl_error" in Path("schedule_scan.py").read_text(encoding="utf-8")),
+        ("Seven-day report-list cache", '"report_list_cache_ttl_hours": 168' in config_text),
     ]
 
     failed = [name for name, ok in checks if not ok]
