@@ -1,5 +1,5 @@
 @echo off
-title WCL Reclear Tracker v1.7.0
+title WCL Reclear Tracker v1.7.1
 
 rem Find a working Python command. The standard Windows installer often
 rem provides "py" without adding "python" to PATH.
@@ -21,49 +21,26 @@ if not defined PYTHON_CMD goto nopython
 
 :menu
 cls
-echo WCL Reclear Tracker v1.7.0
+echo WCL Reclear Tracker v1.7.1
 echo.
-echo 1. Run tracker using saved/configured guild
-echo 2. Run tracker with guild entered now
-echo 3. Save/change guild profile
-echo 4. Check settings
-echo 5. Reset saved Warcraft Logs API key
-echo 6. Reset saved guild profile
-echo 7. Run self-check
-echo 8. Clear Warcraft Logs cache
-echo 9. Clear output files
-echo 10. Run EU comparison
-echo 11. Set up/test WCL v2 OAuth
-echo 12. Reset saved WCL v2 OAuth
-echo 13. Test v2 guild reports
-echo 14. Test guild discovery only
-echo 15. Schedule scan only
-echo 16. Show cached likely 2-day guilds
-echo 17. Test WoWProgress 1-2 raids/week
-echo 18. Check for and install updates
-echo 19. Exit
+echo 1. Run main tracker
+echo 2. Find likely 2-day guilds
+echo 3. Show saved likely 2-day guilds
+echo 4. Settings and maintenance
+echo 5. Check for and install updates
+echo 6. Exit
+echo.
+echo The main tracker automatically asks for and saves your guild and
+echo Warcraft Logs details if they have not been set up yet.
 echo.
 set /p choice=Choose an option: 
 
 if "%choice%"=="1" goto run
-if "%choice%"=="2" goto runguild
-if "%choice%"=="3" goto saveguild
-if "%choice%"=="4" goto check
-if "%choice%"=="5" goto resetkey
-if "%choice%"=="6" goto resetguild
-if "%choice%"=="7" goto selfcheck
-if "%choice%"=="8" goto clearcache
-if "%choice%"=="9" goto clearoutput
-if "%choice%"=="10" goto comparison
-if "%choice%"=="11" goto setupv2
-if "%choice%"=="12" goto resetv2
-if "%choice%"=="13" goto testv2reports
-if "%choice%"=="14" goto testdiscovery
-if "%choice%"=="15" goto schedulescan
-if "%choice%"=="16" goto querytwoday
-if "%choice%"=="17" goto testwowprogress
-if "%choice%"=="18" goto update
-if "%choice%"=="19" goto end
+if "%choice%"=="2" goto schedulescan
+if "%choice%"=="3" goto querytwoday
+if "%choice%"=="4" goto settings
+if "%choice%"=="5" goto update
+if "%choice%"=="6" goto end
 
 echo.
 echo Invalid option.
@@ -73,160 +50,100 @@ goto menu
 :run
 cls
 %PYTHON_CMD% START_HERE.py
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:runguild
-cls
-echo Enter guild details for this run only.
-echo.
-set /p guild=Guild name: 
-set /p realm=Realm name: 
-set /p region=Region [EU]: 
-if "%region%"=="" set region=EU
-%PYTHON_CMD% START_HERE.py --guild "%guild%" --realm "%realm%" --region "%region%"
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:saveguild
-cls
-echo Enter guild details to save globally.
-echo.
-set /p guild=Guild name: 
-set /p realm=Realm name: 
-set /p region=Region [EU]: 
-if "%region%"=="" set region=EU
-%PYTHON_CMD% START_HERE.py --guild "%guild%" --realm "%realm%" --region "%region%" --save-guild
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:check
-cls
-%PYTHON_CMD% START_HERE.py --check-settings
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:resetkey
-cls
-%PYTHON_CMD% START_HERE.py --reset-key
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:resetguild
-cls
-%PYTHON_CMD% START_HERE.py --reset-guild
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:selfcheck
-cls
-%PYTHON_CMD% self_check.py
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:clearcache
-cls
-%PYTHON_CMD% START_HERE.py --clear-cache
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:clearoutput
-cls
-%PYTHON_CMD% START_HERE.py --clear-output
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:comparison
-cls
-%PYTHON_CMD% START_HERE.py --comparison
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:setupv2
-cls
-%PYTHON_CMD% START_HERE.py --setup-v2
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:resetv2
-cls
-%PYTHON_CMD% START_HERE.py --reset-v2
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:testv2reports
-cls
-%PYTHON_CMD% START_HERE.py --test-v2-reports
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
-
-:testdiscovery
-cls
-%PYTHON_CMD% START_HERE.py --test-discovery
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
+goto finished
 
 :schedulescan
 cls
 %PYTHON_CMD% START_HERE.py --schedule-scan
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
+goto finished
 
 :querytwoday
 cls
 %PYTHON_CMD% query_schedule_cache.py --two-day --limit 100
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
+goto finished
 
-
-:testwowprogress
+:settings
 cls
-%PYTHON_CMD% START_HERE.py --test-wowprogress
+echo Settings and maintenance
 echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
+echo 1. Change saved guild
+echo 2. Set up or test WCL v2 Client ID and Secret
+echo 3. Forget saved WCL v1 API key
+echo 4. Forget saved WCL v2 credentials
+echo 5. Check current settings
+echo 6. Clear cached WCL and comparison data
+echo 7. Clear output files
+echo 8. Run app self-check
+echo 9. Back to main menu
+echo.
+set /p settings_choice=Choose an option: 
+
+if "%settings_choice%"=="1" goto changeguild
+if "%settings_choice%"=="2" goto setupv2
+if "%settings_choice%"=="3" goto resetkey
+if "%settings_choice%"=="4" goto resetv2
+if "%settings_choice%"=="5" goto check
+if "%settings_choice%"=="6" goto clearcache
+if "%settings_choice%"=="7" goto clearoutput
+if "%settings_choice%"=="8" goto selfcheck
+if "%settings_choice%"=="9" goto menu
+
+echo.
+echo Invalid option.
+pause
+goto settings
+
+:changeguild
+cls
+echo Enter the guild details to save for future runs.
+echo.
+set /p guild=Guild name: 
+set /p realm=Realm name: 
+set /p region=Region [EU]: 
+if "%region%"=="" set region=EU
+%PYTHON_CMD% START_HERE.py --configure-guild --guild "%guild%" --realm "%realm%" --region "%region%"
+goto settingsfinished
+
+:setupv2
+cls
+%PYTHON_CMD% START_HERE.py --setup-v2
+goto settingsfinished
+
+:resetkey
+cls
+%PYTHON_CMD% START_HERE.py --reset-key
+goto settingsfinished
+
+:resetv2
+cls
+%PYTHON_CMD% START_HERE.py --reset-v2
+goto settingsfinished
+
+:check
+cls
+%PYTHON_CMD% START_HERE.py --check-settings
+goto settingsfinished
+
+:clearcache
+cls
+%PYTHON_CMD% START_HERE.py --clear-cache
+goto settingsfinished
+
+:clearoutput
+cls
+%PYTHON_CMD% START_HERE.py --clear-output
+goto settingsfinished
+
+:selfcheck
+cls
+%PYTHON_CMD% self_check.py
+goto settingsfinished
 
 :update
 cls
 %PYTHON_CMD% updater.py
 if errorlevel 10 goto updated
-echo.
-echo Finished. Press any key to return to menu.
-pause >nul
-goto menu
+goto finished
 
 :updated
 echo.
@@ -234,6 +151,18 @@ echo Update installed. Press any key to close the tracker.
 echo Then reopen START_WCL_RECLEAR_TRACKER.bat to use the new version.
 pause >nul
 exit
+
+:finished
+echo.
+echo Finished. Press any key to return to the main menu.
+pause >nul
+goto menu
+
+:settingsfinished
+echo.
+echo Finished. Press any key to return to settings.
+pause >nul
+goto settings
 
 :end
 exit
