@@ -11,7 +11,7 @@ import re
 from settings_manager import get_global_cache_dir
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 @dataclass(slots=True)
