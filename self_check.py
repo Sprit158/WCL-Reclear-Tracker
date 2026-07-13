@@ -75,7 +75,9 @@ def main() -> None:
         ("Seven-day report-list cache", '"report_list_cache_ttl_hours": 168' in config_text),
         ("Readable saved-guild table", "def render_table" in Path("query_schedule_cache.py").read_text(encoding="utf-8") and "M1/wk" in Path("query_schedule_cache.py").read_text(encoding="utf-8")),
         ("First-month raid-day average", Path("schedule_scan.py").read_text(encoding="utf-8").count("first_month_average_raid_days") >= 4 and "first_month_average_raid_days" in Path("schedule_database.py").read_text(encoding="utf-8")),
-        ("Core-days plus overtime algorithm", "estimated_avg_nights" in Path("schedule_scan.py").read_text(encoding="utf-8") and "overtime_nights" in Path("schedule_scan.py").read_text(encoding="utf-8") and '"minimum_counted_raid_day_minutes": 15' in config_text),
+        ("Adaptive core-days plus overtime algorithm", "infer_core_raid_days" in Path("schedule_scan.py").read_text(encoding="utf-8") and "core_day_ambiguity_gap" in Path("schedule_scan.py").read_text(encoding="utf-8") and '"minimum_counted_raid_day_minutes": 15' in config_text),
+        ("Short Mythic reports count and cache", "hydrate_short_report_mythic_evidence" in Path("schedule_scan.py").read_text(encoding="utf-8") and "schedule_report_fight_cache" in Path("schedule_database.py").read_text(encoding="utf-8")),
+        ("Own guild included in comparison table", '"include_own": true' in config_text and "saved_own_guild_reference" in Path("wowprogress_backup.py").read_text(encoding="utf-8") and "(you)" in Path("query_schedule_cache.py").read_text(encoding="utf-8")),
     ]
 
     failed = [name for name, ok in checks if not ok]
