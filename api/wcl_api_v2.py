@@ -7,7 +7,7 @@ import time
 import requests
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 class WCLV2ApiError(Exception):
@@ -299,4 +299,3 @@ class WCLV2Client:
             "endTime": int(report.get("endTime") or 0),
             "fights": fights,
         }
-
