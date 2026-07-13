@@ -8,7 +8,9 @@ A local Python tool for comparing World of Warcraft Mythic guild progression, re
 2. Extract the ZIP.
 3. Double-click `START_WCL_RECLEAR_TRACKER.bat`.
 
-After installation, choose **18. Check for and install updates** from the launcher menu. Updates are downloaded from this repository and applied in place while preserving local guild data and settings.
+The main launcher automatically asks for and saves missing guild and Warcraft Logs details. Maintenance and credential-reset tools are grouped under **Settings and maintenance**.
+
+Choose **5. Check for and install updates** from the launcher menu. Updates are downloaded from this repository and applied in place while preserving local guild data and settings.
 
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
