@@ -4,6 +4,7 @@ import argparse
 
 from main import load_config_early
 from schedule_database import connect_schedule_db
+from settings_manager import get_guild_profile_from_settings
 
 
 def table_cell(value, width: int, align: str = "left") -> str:
@@ -19,7 +20,7 @@ def number_cell(value) -> str:
     return f"{float(value):.2f}".rstrip("0").rstrip(".")
 
 
-def render_table(rows) -> str:
+def render_table(rows, own_profile=None) -> str:
     columns = [
         ("Rank", "rank", 4, "right"),
         ("Guild", "guild", 19, "left"),
@@ -44,6 +45,12 @@ def render_table(rows) -> str:
         cells = []
         for _, key, width, align in columns:
             value = number_cell(row[key]) if key in numeric else row[key]
+            if key == "guild" and own_profile and (
+                str(row["guild"]).strip().lower() == own_profile.name.strip().lower()
+                and str(row["realm"]).strip().lower() == own_profile.realm.strip().lower()
+                and str(row["region"]).strip().upper() == own_profile.region.strip().upper()
+            ):
+                value = f"{value} (you)"
             cells.append(table_cell(value, width, align))
         lines.append("| " + " | ".join(cells) + " |")
     lines.append(separator)
@@ -61,12 +68,20 @@ def main() -> None:
 
     config = load_config_early()
     conn = connect_schedule_db(config)
+    own_profile = get_guild_profile_from_settings()
 
     where = []
     params = []
 
     if args.two_day:
-        where.append("is_likely_two_day = 1")
+        if own_profile:
+            where.append(
+                "(is_likely_two_day = 1 OR "
+                "(LOWER(guild) = LOWER(?) AND LOWER(realm) = LOWER(?) AND UPPER(region) = UPPER(?)))"
+            )
+            params.extend([own_profile.name, own_profile.realm, own_profile.region])
+        else:
+            where.append("is_likely_two_day = 1")
     if args.days:
         for day in args.days.replace(",", " ").split():
             where.append("inferred_raid_days LIKE ?")
@@ -109,9 +124,10 @@ def main() -> None:
         print("No cached schedule results matched.")
         return
 
-    print(render_table(rows))
+    print(render_table(rows, own_profile))
     print()
     print("Avg/wk = recurring core raid days plus overtime days divided by active weeks")
+    print("        ambiguous/rotating schedules use their observed average instead of guessed overtime")
     print("M1/wk  = average raid days across the first four reset weeks (zero-night weeks included)")
     print("Med/wk = median raid nights per active week; Hours = median logged-window hours per week")
 
