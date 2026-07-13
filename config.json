@@ -26,7 +26,7 @@
     "location": "global_app_data"
   },
   "api_mode": "v1_api_key",
-  "version": "1.7.5",
+  "version": "1.7.6",
   "logs": {
     "enabled": true,
     "folder": "logs",
@@ -239,6 +239,8 @@
       "force_refresh": false,
       "report_discovery_source": "wcl_v2",
       "min_raid_night_span_minutes": 90,
+      "minimum_counted_raid_day_minutes": 15,
+      "core_raid_day_min_active_week_fraction": 0.55,
       "max_raid_night_span_hours": 8,
       "max_same_day_gap_hours": 8,
       "raid_start_hour_min": 15,
