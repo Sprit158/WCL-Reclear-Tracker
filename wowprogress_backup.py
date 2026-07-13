@@ -240,7 +240,7 @@ def rows_from_wowprogress_backup_for_schedule_scan(config: JsonDict) -> tuple[li
             break
 
     include_only_above = bool(settings.get("include_only_above_own", True))
-    include_own = bool(settings.get("include_own", False))
+    include_own = bool(settings.get("include_own", True))
     max_rows = int(settings.get("max_backup_guilds_used", 1000))
     raw_region_filter = str(settings.get("region_filter", "EU") or "").strip()
     if raw_region_filter.lower() in {"", "all", "world", "any", "*"}:
@@ -297,6 +297,30 @@ def rows_from_wowprogress_backup_for_schedule_scan(config: JsonDict) -> tuple[li
 
         if len(output) >= max_rows:
             break
+
+    # The backup contains declared 1-2 day peers and may not contain the user's
+    # guild at all. Add it explicitly as the comparison baseline when its saved
+    # identity and rank are available.
+    own_already_present = any(
+        normalise_guild(item.get("guild")) == own_guild
+        and normalise_realm(item.get("realm")) == own_realm
+        and normalise_region(item.get("region")) == own_region
+        for item in output
+    )
+    if include_own and own_guild and own_realm and own_region and own_rank is not None and not own_already_present:
+        output.append({
+            "guild": configured_guild or (saved_profile.name if saved_profile else ""),
+            "realm": configured_realm or (saved_profile.realm if saved_profile else ""),
+            "region": own_region,
+            "rank": own_rank,
+            "endboss_kill_timestamp_ms": None,
+            "endboss_kill_date": "",
+            "endboss_kill_source": "",
+            "source": "saved_own_guild_reference",
+            "wowprogress_declared_raids_week": "own guild reference",
+            "wowprogress_progress": "",
+            "wowprogress_notes": "Added as the user's comparison baseline.",
+        })
 
     output.sort(key=lambda r: (r.get("rank") is None, int(r.get("rank") or 999999), str(r.get("guild", "")).lower()))
 
