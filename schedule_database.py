@@ -55,6 +55,7 @@ def run_schema_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "schedule_scan_results", "progression_cutoff_date", "TEXT")
     ensure_column(conn, "schedule_scan_results", "progression_cutoff_source", "TEXT")
     ensure_column(conn, "schedule_scan_results", "reports_after_cutoff_excluded", "INTEGER DEFAULT 0")
+    ensure_column(conn, "schedule_scan_results", "first_month_average_raid_days", "REAL")
 
 
 def init_schedule_db(conn: sqlite3.Connection) -> None:
@@ -122,6 +123,7 @@ def init_schedule_db(conn: sqlite3.Connection) -> None:
             active_weeks INTEGER NOT NULL,
             inferred_days_per_week REAL,
             average_raid_days_per_active_week REAL,
+            first_month_average_raid_days REAL,
             logged_window_hours_per_week REAL,
             inferred_hours_per_week REAL,
             inferred_raid_days TEXT,
@@ -170,6 +172,7 @@ def init_schedule_db(conn: sqlite3.Connection) -> None:
                 rank,
                 inferred_days_per_week,
                 average_raid_days_per_active_week,
+                first_month_average_raid_days,
                 logged_window_hours_per_week,
                 inferred_hours_per_week,
                 inferred_raid_days,
@@ -551,6 +554,7 @@ def upsert_schedule_result(conn: sqlite3.Connection, result: Any) -> None:
             active_weeks,
             inferred_days_per_week,
             average_raid_days_per_active_week,
+            first_month_average_raid_days,
             logged_window_hours_per_week,
             inferred_hours_per_week,
             inferred_raid_days,
@@ -563,7 +567,7 @@ def upsert_schedule_result(conn: sqlite3.Connection, result: Any) -> None:
             notes,
             scanned_at_unix
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_key) DO UPDATE SET
             guild = excluded.guild,
             realm = excluded.realm,
@@ -578,6 +582,7 @@ def upsert_schedule_result(conn: sqlite3.Connection, result: Any) -> None:
             active_weeks = excluded.active_weeks,
             inferred_days_per_week = excluded.inferred_days_per_week,
             average_raid_days_per_active_week = excluded.average_raid_days_per_active_week,
+            first_month_average_raid_days = excluded.first_month_average_raid_days,
             logged_window_hours_per_week = excluded.logged_window_hours_per_week,
             inferred_hours_per_week = excluded.inferred_hours_per_week,
             inferred_raid_days = excluded.inferred_raid_days,
@@ -605,6 +610,7 @@ def upsert_schedule_result(conn: sqlite3.Connection, result: Any) -> None:
             result.active_weeks,
             result.inferred_days_per_week,
             getattr(result, "average_raid_days_per_active_week", None),
+            getattr(result, "first_month_average_raid_days", None),
             getattr(result, "logged_window_hours_per_week", None),
             result.inferred_hours_per_week,
             result.inferred_raid_days,
