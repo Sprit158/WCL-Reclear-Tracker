@@ -1,5 +1,5 @@
 @echo off
-title WCL Reclear Tracker v1.6.21
+title WCL Reclear Tracker v1.6.22
 
 rem Find a working Python command. The standard Windows installer often
 rem provides "py" without adding "python" to PATH.
@@ -21,7 +21,7 @@ if not defined PYTHON_CMD goto nopython
 
 :menu
 cls
-echo WCL Reclear Tracker v1.6.21
+echo WCL Reclear Tracker v1.6.22
 echo.
 echo 1. Run tracker using saved/configured guild
 echo 2. Run tracker with guild entered now
