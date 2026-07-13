@@ -46,7 +46,7 @@ from wcl_api import WCLApiError
 from v2_report_tools import fetch_guild_reports_v2
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 def database_path(config: JsonDict) -> Path:
