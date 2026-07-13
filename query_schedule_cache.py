@@ -111,7 +111,7 @@ def main() -> None:
 
     print(render_table(rows))
     print()
-    print("Avg/wk = average raid days per active week")
+    print("Avg/wk = recurring core raid days plus overtime days divided by active weeks")
     print("M1/wk  = average raid days across the first four reset weeks (zero-night weeks included)")
     print("Med/wk = median raid nights per active week; Hours = median logged-window hours per week")
 
