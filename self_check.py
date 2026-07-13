@@ -61,6 +61,9 @@ def main() -> None:
         ("GitHub updater present", Path("updater.py").exists() and "releases/latest" in Path("updater.py").read_text(encoding="utf-8")),
         ("Launcher update option", "Check for and install updates" in Path("START_WCL_RECLEAR_TRACKER.bat").read_text(encoding="utf-8")),
         ("Updater preserves local guild data", "data/wowprogress_1_2_day_backup.csv" in Path("updater.py").read_text(encoding="utf-8") and "comparison_guilds.csv" in Path("updater.py").read_text(encoding="utf-8")),
+        ("Metadata-first WCL request reduction", "shortlist_reports_for_deep_inspection" in Path("guild_fetcher.py").read_text(encoding="utf-8") and '"metadata_first"' in config_text),
+        ("WoWProgress backup persists between versions", "global_backup_path" in Path("wowprogress_backup.py").read_text(encoding="utf-8") and "destination.exists()" in Path("updater.py").read_text(encoding="utf-8")),
+        ("Schedule scan uses saved own guild", "get_guild_profile_from_settings" in Path("wowprogress_backup.py").read_text(encoding="utf-8") and "Own guild used" in Path("schedule_scan.py").read_text(encoding="utf-8")),
     ]
 
     failed = [name for name, ok in checks if not ok]
