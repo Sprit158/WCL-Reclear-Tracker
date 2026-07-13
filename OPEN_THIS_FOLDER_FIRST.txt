@@ -1,0 +1,4 @@
+To run the tracker, double-click START_WCL_RECLEAR_TRACKER.bat.
+v1.6.21 fixes Python detection on Windows by supporting py -3, python, and python3.
+v1.6.20 makes option 15 use EU-only backup filtering by default.
+Change comparison.wowprogress_backup.region_filter in config.json to EU, US, OC, or blank for world/all.

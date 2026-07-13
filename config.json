@@ -1,0 +1,347 @@
+{
+  "target_python": "3.14",
+  "mythic_difficulty": 5,
+  "include_downtime": false,
+  "minimum_fight_seconds": 10,
+  "output_folder": "output",
+  "auto_install_dependencies": true,
+  "cache": {
+    "enabled": true,
+    "folder": "reports",
+    "force_refresh": false,
+    "schema_version": 1,
+    "supported_schema_versions": [
+      1
+    ],
+    "location": "global_app_data",
+    "legacy_local_folder": "cache/reports",
+    "guild_reports_folder": "guild_reports",
+    "fights_folder": "reports",
+    "clear_all_cache_on_start": false
+  },
+  "settings": {
+    "use_global_settings": true,
+    "schema_version": 1,
+    "credential_mode": "v1_api_key",
+    "location": "global_app_data"
+  },
+  "api_mode": "v1_api_key",
+  "version": "1.6.20",
+  "logs": {
+    "enabled": true,
+    "folder": "logs",
+    "latest_log": "latest_run.txt"
+  },
+  "mode": "guild",
+  "guild": {
+    "enabled": true,
+    "name": "",
+    "realm": "",
+    "region": "EU",
+    "save_to_global_settings": true
+  },
+  "season": {
+    "name": "Midnight Season 1 Mythic",
+    "start_date": "2026-03-24",
+    "end_date": "",
+    "timezone": "Europe/London",
+    "notes": [
+      "Midnight Season 1 began the week of 2026-03-17.",
+      "Mythic Voidspire and Dreamrift opened the week of 2026-03-24.",
+      "March on Quel'Danas opened the week of 2026-03-31.",
+      "The tracker is Mythic-only, so the default fetch start date is 2026-03-24."
+    ]
+  },
+  "midnight_raid_zones": {
+    "mode": "fixed_midnight_season_1",
+    "zone_ids": [
+      46
+    ],
+    "warcraft_logs_zone_name": "VS / DR / MQD",
+    "name_contains": [
+      "VS / DR / MQD",
+      "The Voidspire",
+      "Voidspire",
+      "The Dreamrift",
+      "Dreamrift",
+      "March on Quel'Danas",
+      "March on Quel`Danas",
+      "March of Quel'Danas",
+      "March of Quel`Danas",
+      "Quel'Danas",
+      "Quel`Danas",
+      "Midnight"
+    ],
+    "raids": [
+      {
+        "name": "The Voidspire",
+        "boss_count": 6,
+        "mythic_open_date": "2026-03-24"
+      },
+      {
+        "name": "The Dreamrift",
+        "boss_count": 1,
+        "mythic_open_date": "2026-03-24"
+      },
+      {
+        "name": "March on Quel'Danas",
+        "boss_count": 2,
+        "mythic_open_date": "2026-03-31"
+      }
+    ],
+    "total_bosses": 9
+  },
+  "report_selection": {
+    "one_report_per_day": false,
+    "combine_same_day_reports": true,
+    "choose_by": "most_mythic_pulls",
+    "minimum_mythic_pulls": 1,
+    "max_same_night_gap_minutes": 90,
+    "max_raid_night_span_hours": 8,
+    "overlap_tolerance_minutes": 10,
+    "inspect_all_reports_before_zone_filter": true,
+    "select_reports_by_actual_boss_pulls": true,
+    "write_report_audit": true,
+    "tracked_bosses_must_have_pulls": true,
+    "write_report_boss_audit": true
+  },
+  "manual_reports_fallback": true,
+  "boss_filter": {
+    "enabled": true,
+    "mode": "allow_list",
+    "allowed_bosses": [
+      "Imperator Averzian",
+      "Vorasius",
+      "Chimaerus, the Undreamt God",
+      "Chimaerus the Undreamt God",
+      "Fallen-King Salhadaar",
+      "Vaelgor & Ezzorak",
+      "Lightblinded Vanguard",
+      "Crown of the Cosmos",
+      "Belo'ren, Child of Al'ar",
+      "Midnight Falls"
+    ],
+    "excluded_bosses": [
+      "Rotmire"
+    ],
+    "normalise_names": true,
+    "warn_on_unexpected_bosses": true
+  },
+  "time_calculation": {
+    "pull_duration": true,
+    "window_time": true,
+    "window_gap_assignment": "next_fight",
+    "max_gap_minutes_in_window": 45,
+    "progression_boss_window": true
+  },
+  "metrics": {
+    "reclear_tax": true,
+    "downtime_hours": true,
+    "pull_uptime_percent": true,
+    "pulls_per_hour": true,
+    "reclear_wipes": true,
+    "boss_wall_percent": true
+  },
+  "output": {
+    "overwrite_existing": true,
+    "clear_output_folder_before_export": true
+  },
+  "comparison_mode": {
+    "automatic_only": true,
+    "manual_overrides_allowed": false,
+    "require_report_audit": true,
+    "description": "Comparison mode uses automatically discovered guild reports and actual tracked boss pulls.",
+    "all_boss_audit": true
+  },
+  "comparison": {
+    "enabled": true,
+    "guilds_file": "comparison_guilds.csv",
+    "database_location": "global_app_data",
+    "database_file": "comparison.sqlite",
+    "output_folder": "output/comparison",
+    "region_filter": "EU",
+    "target_days_per_week": 2,
+    "target_hours_per_week": 6,
+    "hours_tolerance": 1.5,
+    "max_guilds_per_run": 10,
+    "delay_between_guilds_seconds": 0.25,
+    "use_cached_guild_if_available": true,
+    "refresh_existing_guilds": false,
+    "schedule_detection": {
+      "wcl_api_or_page": true,
+      "fallback_infer_from_logs": true,
+      "minimum_weeks_for_inference": 2
+    },
+    "auto_discover_guilds": true,
+    "use_comparison_guilds_file": true,
+    "discovery": {
+      "enabled": true,
+      "source": "raiderio_raid_rankings_api",
+      "zone_id": 46,
+      "region": "eu",
+      "metric": "progress",
+      "max_pages": 10,
+      "guilds_above_own": 50,
+      "guilds_below_own": 0,
+      "max_discovered_guilds_used": 50,
+      "delay_between_pages_seconds": 0.75,
+      "output_file": "output/comparison/discovered_guilds.csv",
+      "own_guild": "",
+      "own_realm": "",
+      "own_region": "EU",
+      "note": "Raider.IO API raid slug for Midnight Season 1 is tier-mn-1.",
+      "fallback_source": "wcl_progress_rankings_page",
+      "raid_slug": "tier-mn-1",
+      "difficulty": "mythic",
+      "page_start": 0,
+      "debug_output_file": "output/comparison/discovery_debug.txt",
+      "api_limit": 200,
+      "test_only_output_file": "output/comparison/discovery_test.csv",
+      "try_html_fallback": true,
+      "try_multiple_api_shapes": true,
+      "previous_bad_slug": "midnight-season-1",
+      "max_rank_to_fetch": 2000,
+      "cache_enabled": true,
+      "cache_ttl_hours": 168,
+      "force_refresh_cache": false,
+      "cache_backend": "sqlite",
+      "cache_note": "v1.6.20 caches Raider.IO discovered guild rankings in comparison.sqlite and fetches top 2000 by default.",
+      "cache_schema_version": "v3_ignore_boolean_defeated"
+    },
+    "report_discovery_mode": "v2_with_v1_fallback",
+    "note_report_discovery": "Guild list discovery is separate. v2 report discovery is used once a guild name/realm/region is known.",
+    "schedule_scan": {
+      "enabled": true,
+      "use_inferred_schedule_from_logs": true,
+      "max_guilds_per_run": 25,
+      "sources": {
+        "wcl_guild_page": true,
+        "wcl_recruitment_page": true,
+        "raiderio_guild_page": true
+      },
+      "output_file": "output/comparison/schedule_scan.csv",
+      "debug_file": "output/comparison/schedule_scan_debug.txt",
+      "raw_folder": "output/comparison/schedule_raw",
+      "request_delay_seconds": 0.5,
+      "timeout_seconds": 30,
+      "user_agent": "WCLReclearTracker/1.6.20 schedule-scan; local personal tool",
+      "method": "wcl_api_report_list_candidate_filter",
+      "use_page_declared_schedule": false,
+      "cache_folder": "schedule_report_lists",
+      "force_refresh": false,
+      "report_discovery_source": "wcl_v2",
+      "min_raid_night_span_minutes": 90,
+      "max_raid_night_span_hours": 8,
+      "max_same_day_gap_hours": 8,
+      "raid_start_hour_min": 15,
+      "raid_start_hour_max": 23,
+      "minimum_active_weeks": 4,
+      "two_day_min_hours_per_week": 4.5,
+      "two_day_max_hours_per_week": 8.0,
+      "timezone": "Europe/London",
+      "note": "v1.6.20 infers schedule from WCL v2 report start/end times. It does not inspect detailed events.",
+      "cache_backend": "sqlite",
+      "legacy_json_cache_fallback": true,
+      "store_raw_reports_in_sqlite": true,
+      "store_raid_nights_in_sqlite": true,
+      "sqlite_note": "v1.6.20 stores schedule report cache, schedule results, and raid nights in comparison.sqlite for later searching.",
+      "use_deep_fight_time_in_schedule_scan": false,
+      "deep_time_after_selection_only": true,
+      "use_report_window_hours": true,
+      "candidate_two_day_min_nights_per_week": 1.5,
+      "candidate_two_day_max_nights_per_week": 2.5,
+      "candidate_peer_min_logged_hours_per_week": 4.5,
+      "candidate_peer_max_logged_hours_per_week": 9.0,
+      "selection_note": "v1.6.20 schedule scan is a cheap candidate filter. It does not fetch fight summaries; deeper Mythic time is intended only after candidates are selected.",
+      "skip_existing_schedule_results": true,
+      "retry_error_results": false,
+      "scan_only_unprocessed_guilds": true,
+      "fast_mode_note": "v1.6.20 skips guilds already scanned in schedule_scan_results, so repeated option 15 runs process the next unscanned batch.",
+      "parallel_schedule_scan": true,
+      "schedule_scan_workers": 4,
+      "parallel_fetch_only": true,
+      "main_thread_sqlite_writes": true,
+      "max_retry_attempts": 2,
+      "wcl_request_delay_seconds": 0.1,
+      "parallel_note": "v1.6.20 fetches WCL report lists concurrently using threads, but SQLite writes remain on the main thread.",
+      "schedule_period_mode": "progression_until_endboss_kill",
+      "use_guild_endboss_kill_cutoff": true,
+      "endboss_name": "Midnight Falls",
+      "include_kill_day_in_schedule": true,
+      "fallback_when_kill_date_missing": "use_full_season",
+      "kill_cutoff_note": "v1.6.20 filters schedule reports to the guild's own endboss kill/progression period when a kill timestamp/date is available from discovery.",
+      "fallback_find_endboss_kill_from_wcl": false,
+      "endboss_kill_lookup_scope": "candidate_and_ambiguous",
+      "endboss_kill_cache_enabled": true,
+      "endboss_kill_cache_ttl_hours": 720,
+      "endboss_encounter_names": [
+        "Midnight Falls",
+        "Lura"
+      ],
+      "endboss_kill_lookup_note": "v1.6.20 uses WCL fight summaries only to find the first endboss kill date when Raider.IO does not provide it.",
+      "source_mode": "wowprogress_backup_above_own_declared_1_2",
+      "note_v1_6_19": "Option 15 defaults to declared-only backup scan with zero WCL calls. Turn wowprogress_backup.wcl_enrichment_enabled=true to enrich with WCL later."
+    },
+    "wowprogress": {
+      "enabled": true,
+      "base_url": "https://www.wowprogress.com/",
+      "raids_week": "1-2",
+      "region_filter": "EU",
+      "max_pages": 3,
+      "delay_between_pages_seconds": 1.0,
+      "output_file": "output/comparison/wowprogress_1_2_raids.csv",
+      "debug_file": "output/comparison/wowprogress_debug.txt",
+      "note": "v1.6.20 test-only WoWProgress scraper for declared 1-2 raids/week guilds."
+    },
+    "wowprogress_backup": {
+      "enabled": true,
+      "backup_file": "data/wowprogress_1_2_day_backup.csv",
+      "declared_raids_per_week": "1-2",
+      "use_when_wcl_reports_zero": true,
+      "use_when_wcl_lookup_failed": true,
+      "match_on": [
+        "guild",
+        "region",
+        "realm"
+      ],
+      "source": "wowprogress_screenshot_backup",
+      "note": "v1.6.20 uses this backup only when WCL has no public reports or guild lookup fails. It is declared schedule data, not measured hours.",
+      "use_as_schedule_scan_source": true,
+      "include_only_above_own": true,
+      "include_own": false,
+      "own_guild": "",
+      "own_region": "EU",
+      "own_realm": "",
+      "own_world_rank": 0,
+      "max_backup_guilds_used": 1000,
+      "region_filter": "EU",
+      "note_v1_6_18": "When use_as_schedule_scan_source=true, option 15 scans declared 1-2 day guilds from the WoWProgress backup above the user's guild instead of the 50-guild Raider.IO window.",
+      "declared_only_scan": true,
+      "wcl_enrichment_enabled": false,
+      "note_v1_6_19": "When declared_only_scan=true, option 15 scans the WoWProgress backup list without calling WCL. This uses zero WCL tokens.",
+      "allowed_region_filter_values": [
+        "",
+        "EU",
+        "US",
+        "OC"
+      ],
+      "region_filter_note": "Use EU, US, or OC. Use an empty string for world/all regions.",
+      "note_v1_6_20": "Option 15 now filters the WoWProgress backup list to EU by default. Change comparison.wowprogress_backup.region_filter in config.json to use another region or blank for world/all."
+    }
+  },
+  "api": {
+    "preferred_mode": "v2_oauth",
+    "fallback_mode": "v1_api_key",
+    "v2": {
+      "enabled": true,
+      "token_url": "https://www.warcraftlogs.com/oauth/token",
+      "graphql_url": "https://www.warcraftlogs.com/api/v2/client",
+      "token_cache_seconds_safety_margin": 120,
+      "use_for_guild_reports": true
+    },
+    "v1": {
+      "enabled": true,
+      "note": "v1 remains available as a fallback for existing report fight-summary logic."
+    }
+  }
+}

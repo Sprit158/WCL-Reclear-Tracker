@@ -1,0 +1,3 @@
+guild,realm,region,declared_days_per_week,declared_hours_per_week,schedule_source
+# Add guilds below, one per line.
+# Example Guild,Example Realm,EU,2,6,manual

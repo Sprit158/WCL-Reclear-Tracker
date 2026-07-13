@@ -1,0 +1,65 @@
+name: Build release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - version.txt
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Run self-check
+        run: python self_check.py
+
+      - name: Build release ZIP
+        shell: bash
+        run: |
+          VERSION="$(tr -d '\r\n' < version.txt)"
+          BUILD_DIR="build_v${VERSION//./_}"
+          mkdir -p "$BUILD_DIR"
+          rsync -a ./ "$BUILD_DIR/" \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            --exclude '.env' \
+            --exclude 'output/' \
+            --exclude 'logs/' \
+            --exclude 'cache/' \
+            --exclude 'guild_reports/' \
+            --exclude 'schedule_report_lists/' \
+            --exclude 'comparison.sqlite' \
+            --exclude 'reports.txt' \
+            --exclude 'extra_reports.txt' \
+            --exclude 'data/wowprogress_1_2_day_backup.csv' \
+            --exclude 'v*.zip' \
+            --exclude 'build_v*/'
+          zip -qr "v${VERSION}.zip" "$BUILD_DIR"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            gh release upload "v${VERSION}" "v${VERSION}.zip" --clobber
+          else
+            gh release create "v${VERSION}" "v${VERSION}.zip" \
+              --title "v${VERSION}" \
+              --generate-notes
+          fi

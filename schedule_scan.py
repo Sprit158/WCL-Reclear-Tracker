@@ -1,0 +1,1206 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, asdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
+from pathlib import Path
+from statistics import median
+from typing import Any
+from zoneinfo import ZoneInfo
+import csv
+import json
+import re
+import time
+
+from guild_discovery import discover_guilds, select_guilds_around_own, write_discovered_guilds
+from guild_fetcher import season_range_ms
+from settings_manager import get_global_cache_dir, get_guild_profile_from_settings
+from v2_report_tools import slugify_realm, v2_reports_to_v1_meta
+from v2_setup import build_v2_client, save_client_token
+from wowprogress_backup import find_wowprogress_backup_match, rows_from_wowprogress_backup_for_schedule_scan
+from schedule_database import (
+    connect_schedule_db,
+    get_cached_endboss_kill,
+    get_cached_reports,
+    get_schedule_result_statuses,
+    replace_raid_nights,
+    should_skip_existing_schedule_result,
+    upsert_discovered_guilds,
+    upsert_endboss_kill_cache,
+    upsert_report_cache,
+    upsert_schedule_result,
+)
+
+
+type JsonDict = dict[str, Any]
+
+
+@dataclass(slots=True)
+class NightSummary:
+    date: str
+    weekday: str
+    week_start: str
+    start_ms: int
+    end_ms: int
+    hours: float
+    report_count: int
+    report_codes: str
+    zone_names: str
+
+
+@dataclass(slots=True)
+class ScheduleResult:
+    guild: str
+    realm: str
+    region: str
+    rank: int | None
+    reports_found: int
+    reports_used_for_schedule: int
+    progression_cutoff_date: str
+    progression_cutoff_source: str
+    reports_after_cutoff_excluded: int
+    raid_nights_found: int
+    active_weeks: int
+    inferred_days_per_week: float | None
+    average_raid_days_per_active_week: float | None
+    logged_window_hours_per_week: float | None
+    inferred_hours_per_week: float | None
+    inferred_raid_days: str
+    is_likely_two_day: bool
+    candidate_needs_deep_time_review: bool
+    schedule_source: str
+    schedule_confidence: str
+    reason: str
+    example_nights: str
+    notes: str
+
+
+@dataclass(slots=True)
+class ScheduleFetchJobResult:
+    row: dict
+    reports: list[JsonDict]
+    source: str
+    fetched_from_api: bool
+    error: str | None
+    debug_lines: list[str]
+
+
+def slugify(value: str) -> str:
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9]+", "_", value)
+    return value.strip("_") or "unknown"
+
+
+def report_start(report: JsonDict) -> int:
+    return int(report.get("start", report.get("startTime", 0)) or 0)
+
+
+def report_end(report: JsonDict) -> int:
+    return int(report.get("end", report.get("endTime", 0)) or 0)
+
+
+def report_code(report: JsonDict) -> str:
+    return str(report.get("code") or report.get("id") or "")
+
+
+def report_zone_name(report: JsonDict) -> str:
+    zone = report.get("zone")
+    if isinstance(zone, dict):
+        return str(zone.get("name") or "")
+    return str(report.get("zoneName") or "")
+
+
+def local_dt(ms: int, tz_name: str) -> datetime:
+    return datetime.fromtimestamp(ms / 1000, tz=ZoneInfo(tz_name))
+
+
+def local_date(ms: int, tz_name: str) -> str:
+    return local_dt(ms, tz_name).date().isoformat()
+
+
+def week_start_date(date_text: str) -> str:
+    d = datetime.strptime(date_text, "%Y-%m-%d").date()
+    monday = d - timedelta(days=d.weekday())
+    return monday.isoformat()
+
+
+def weekday_name(date_text: str) -> str:
+    d = datetime.strptime(date_text, "%Y-%m-%d").date()
+    return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][d.weekday()]
+
+
+def cache_path_for_guild(config: JsonDict, guild: str, realm: str, region: str, start_ms: int, end_ms: int) -> Path:
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    folder = get_global_cache_dir(scan_cfg.get("cache_folder", "schedule_report_lists"))
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / f"{slugify(region)}_{slugify(realm)}_{slugify(guild)}_{start_ms}_{end_ms}.json"
+
+
+def fetch_guild_reports_v2_cached(
+    client,
+    conn,
+    config: JsonDict,
+    guild: str,
+    realm: str,
+    region: str,
+    debug_lines: list[str],
+) -> tuple[list[JsonDict], str]:
+    season_config = config.get("season", {})
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    start_ms, end_ms = season_range_ms(season_config)
+    force_refresh = bool(scan_cfg.get("force_refresh", False))
+    legacy_json_fallback = bool(scan_cfg.get("legacy_json_cache_fallback", True))
+
+    if not force_refresh:
+        reports = get_cached_reports(conn, guild, realm, region, start_ms, end_ms)
+        if reports is not None:
+            debug_lines.append(f"{guild}-{realm}-{region} :: sqlite reports cache hit :: {len(reports)} reports")
+            return reports, "sqlite_cache"
+
+    # Legacy JSON cache migration/fallback from v1.6.1.
+    path = cache_path_for_guild(config, guild, realm, region, start_ms, end_ms)
+    if legacy_json_fallback and path.exists() and not force_refresh:
+        try:
+            wrapper = json.loads(path.read_text(encoding="utf-8"))
+            reports = wrapper.get("data", [])
+            upsert_report_cache(conn, guild, realm, region, start_ms, end_ms, reports, "legacy_json_migrated")
+            debug_lines.append(f"{guild}-{realm}-{region} :: legacy json cache migrated to sqlite :: {len(reports)} reports")
+            return reports, "legacy_json_migrated"
+        except Exception as e:
+            debug_lines.append(f"{guild}-{realm}-{region} :: legacy json cache read failed :: {type(e).__name__}: {e}")
+
+    reports_raw = client.fetch_guild_reports(
+        guild_name=guild,
+        guild_server_slug=slugify_realm(realm),
+        guild_server_region=region.upper(),
+        start_time=start_ms,
+        end_time=end_ms,
+        max_pages=20,
+    )
+    reports = v2_reports_to_v1_meta(reports_raw)
+
+    upsert_report_cache(conn, guild, realm, region, start_ms, end_ms, reports, "wcl_v2_api")
+    debug_lines.append(f"{guild}-{realm}-{region} :: reports api fetch stored in sqlite :: {len(reports)} reports")
+    return reports, "wcl_v2_api"
+
+
+
+def load_cached_or_legacy_reports_main_thread(
+    conn,
+    config: JsonDict,
+    guild: str,
+    realm: str,
+    region: str,
+    debug_lines: list[str],
+) -> tuple[list[JsonDict], str] | None:
+    """
+    Main-thread cache lookup. Does not call WCL.
+    """
+    season_config = config.get("season", {})
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    start_ms, end_ms = season_range_ms(season_config)
+    force_refresh = bool(scan_cfg.get("force_refresh", False))
+    legacy_json_fallback = bool(scan_cfg.get("legacy_json_cache_fallback", True))
+
+    if not force_refresh:
+        reports = get_cached_reports(conn, guild, realm, region, start_ms, end_ms)
+        if reports is not None:
+            debug_lines.append(f"{guild}-{realm}-{region} :: sqlite reports cache hit :: {len(reports)} reports")
+            return reports, "sqlite_cache"
+
+    path = cache_path_for_guild(config, guild, realm, region, start_ms, end_ms)
+    if legacy_json_fallback and path.exists() and not force_refresh:
+        try:
+            wrapper = json.loads(path.read_text(encoding="utf-8"))
+            reports = wrapper.get("data", [])
+            upsert_report_cache(conn, guild, realm, region, start_ms, end_ms, reports, "legacy_json_migrated")
+            debug_lines.append(f"{guild}-{realm}-{region} :: legacy json cache migrated to sqlite :: {len(reports)} reports")
+            return reports, "legacy_json_migrated"
+        except Exception as e:
+            debug_lines.append(f"{guild}-{realm}-{region} :: legacy json cache read failed :: {type(e).__name__}: {e}")
+
+    return None
+
+
+def fetch_guild_reports_api_worker(row: dict, config: JsonDict) -> ScheduleFetchJobResult:
+    """
+    Worker-thread API fetch only. No SQLite writes in this function.
+    """
+    guild = row["guild"]
+    realm = row["realm"]
+    region = row["region"]
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    season_config = config.get("season", {})
+    start_ms, end_ms = season_range_ms(season_config)
+    max_retries = int(scan_cfg.get("max_retry_attempts", 2))
+    delay = float(scan_cfg.get("wcl_request_delay_seconds", 0.1))
+    debug: list[str] = []
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            if delay and attempt > 1:
+                time.sleep(delay * attempt)
+
+            client = build_v2_client(config)
+            reports_raw = client.fetch_guild_reports(
+                guild_name=guild,
+                guild_server_slug=slugify_realm(realm),
+                guild_server_region=region.upper(),
+                start_time=start_ms,
+                end_time=end_ms,
+                max_pages=20,
+            )
+            reports = v2_reports_to_v1_meta(reports_raw)
+            debug.append(f"{guild}-{realm}-{region} :: reports api fetch worker success :: {len(reports)} reports")
+            return ScheduleFetchJobResult(
+                row=row,
+                reports=reports,
+                source="wcl_v2_api",
+                fetched_from_api=True,
+                error=None,
+                debug_lines=debug,
+            )
+
+        except Exception as e:
+            debug.append(f"{guild}-{realm}-{region} :: worker attempt {attempt}/{max_retries} failed :: {type(e).__name__}: {e}")
+            if attempt >= max_retries:
+                return ScheduleFetchJobResult(
+                    row=row,
+                    reports=[],
+                    source="wcl_v2_api",
+                    fetched_from_api=True,
+                    error=f"{type(e).__name__}: {e}",
+                    debug_lines=debug,
+                )
+
+    return ScheduleFetchJobResult(
+        row=row,
+        reports=[],
+        source="wcl_v2_api",
+        fetched_from_api=True,
+        error="Unknown worker failure",
+        debug_lines=debug,
+    )
+
+
+def classify_and_store_schedule_result(
+    conn,
+    config: JsonDict,
+    row: dict,
+    reports: list[JsonDict],
+    source: str,
+    tz_name: str,
+    debug_lines: list[str],
+) -> ScheduleResult:
+    guild = row["guild"]
+    realm = row["realm"]
+    region = row["region"]
+
+    if not reports:
+        backup_result = backup_or_zero_reports_schedule_result(config, row, debug_lines)
+        if backup_result is not None:
+            upsert_schedule_result(conn, backup_result)
+            replace_raid_nights(conn, guild, realm, region, [])
+            return backup_result
+
+    reports_for_schedule, excluded_after_cutoff, cutoff_date, cutoff_source = filter_reports_to_progression_cutoff(
+        conn, reports, row, config, debug_lines
+    )
+    nights = build_nights_from_reports(reports_for_schedule, config, tz_name)
+    result = classify_schedule(
+        guild=guild,
+        realm=realm,
+        region=region,
+        rank=row.get("rank"),
+        reports=reports_for_schedule,
+        nights=nights,
+        config=config,
+        source=source,
+        progression_cutoff_date=cutoff_date,
+        progression_cutoff_source=cutoff_source,
+        reports_after_cutoff_excluded=excluded_after_cutoff,
+    )
+
+    debug_lines.append(
+        f"{guild}-{realm}-{region} :: nights={len(nights)} active_weeks={result.active_weeks} "
+        f"avg_days={result.average_raid_days_per_active_week} median_nights={result.inferred_days_per_week} "
+        f"logged_window_hours={result.logged_window_hours_per_week} candidate={result.is_likely_two_day}"
+    )
+
+    upsert_schedule_result(conn, result)
+    replace_raid_nights(conn, guild, realm, region, nights)
+
+    for night in nights[:12]:
+        debug_lines.append(
+            f"  night {night.date} {night.weekday} logged_window_hours={night.hours} reports={night.report_count} "
+            f"codes={night.report_codes} zones={night.zone_names}"
+        )
+
+    return result
+
+
+
+
+def declared_only_backup_schedule_result(row: dict, debug_lines: list[str]) -> ScheduleResult:
+    guild = row["guild"]
+    realm = row["realm"]
+    region = row["region"]
+    declared = str(row.get("wowprogress_declared_raids_week") or "1-2")
+    progress = str(row.get("wowprogress_progress") or "")
+    notes = str(row.get("wowprogress_notes") or "")
+
+    debug_lines.append(
+        f"{guild}-{realm}-{region} :: declared-only backup source :: "
+        f"rank={row.get('rank')} declared_raids_week={declared}"
+    )
+
+    note_parts = [
+        f"declared_raids_week={declared}",
+        "source=WoWProgress screenshot backup",
+        "WCL not queried in declared-only scan",
+    ]
+    if progress:
+        note_parts.append(f"progress={progress}")
+    if notes:
+        note_parts.append(f"backup_notes={notes}")
+
+    return ScheduleResult(
+        guild=guild,
+        realm=realm,
+        region=region,
+        rank=row.get("rank"),
+        reports_found=0,
+        reports_used_for_schedule=0,
+        progression_cutoff_date=str(row.get("endboss_kill_date") or ""),
+        progression_cutoff_source=str(row.get("endboss_kill_source") or ""),
+        reports_after_cutoff_excluded=0,
+        raid_nights_found=0,
+        active_weeks=0,
+        inferred_days_per_week=None,
+        average_raid_days_per_active_week=None,
+        logged_window_hours_per_week=None,
+        inferred_hours_per_week=None,
+        inferred_raid_days=f"declared {declared} raids/week",
+        is_likely_two_day=True,
+        candidate_needs_deep_time_review=False,
+        schedule_source="wowprogress_screenshot_backup_declared_only",
+        schedule_confidence="declared_only",
+        reason=f"Selected from WoWProgress backup as declared {declared} raids/week. WCL not queried.",
+        example_nights="",
+        notes="; ".join(note_parts),
+    )
+
+
+def wowprogress_backup_schedule_result(row: dict, match, trigger_reason: str, debug_lines: list[str]) -> ScheduleResult:
+    guild = row["guild"]
+    realm = row["realm"]
+    region = row["region"]
+    debug_lines.append(
+        f"{guild}-{realm}-{region} :: wowprogress backup match :: "
+        f"rank={match.rank} declared_raids_week={match.declared_raids_week} quality={match.match_quality} trigger={trigger_reason}"
+    )
+    notes_parts = [
+        f"WoWProgress backup rank={match.rank}",
+        f"declared_raids_week={match.declared_raids_week}",
+        f"match_quality={match.match_quality}",
+    ]
+    if match.recruiting_flag:
+        notes_parts.append(f"recruiting_flag={match.recruiting_flag}")
+    if match.notes:
+        notes_parts.append(f"backup_notes={match.notes}")
+
+    return ScheduleResult(
+        guild=guild,
+        realm=realm,
+        region=region,
+        rank=row.get("rank") or match.rank,
+        reports_found=0,
+        reports_used_for_schedule=0,
+        progression_cutoff_date=str(row.get("endboss_kill_date") or ""),
+        progression_cutoff_source=str(row.get("endboss_kill_source") or ""),
+        reports_after_cutoff_excluded=0,
+        raid_nights_found=0,
+        active_weeks=0,
+        inferred_days_per_week=None,
+        average_raid_days_per_active_week=None,
+        logged_window_hours_per_week=None,
+        inferred_hours_per_week=None,
+        inferred_raid_days=f"declared {match.declared_raids_week} raids/week",
+        is_likely_two_day=True,
+        candidate_needs_deep_time_review=False,
+        schedule_source="wowprogress_screenshot_backup_declared_only",
+        schedule_confidence="declared_only",
+        reason=f"{trigger_reason}; matched WoWProgress screenshot backup as declared {match.declared_raids_week} raids/week. Not measured hours.",
+        example_nights="",
+        notes="; ".join(notes_parts),
+    )
+
+
+def backup_or_error_schedule_result(config: JsonDict, row: dict, error_text: str, debug_lines: list[str]) -> ScheduleResult:
+    backup_cfg = config.get("comparison", {}).get("wowprogress_backup", {})
+    use_on_error = bool(backup_cfg.get("use_when_wcl_lookup_failed", True))
+    if use_on_error:
+        match = find_wowprogress_backup_match(
+            config,
+            guild=row["guild"],
+            realm=row["realm"],
+            region=row["region"],
+        )
+        if match is not None:
+            return wowprogress_backup_schedule_result(row, match, f"WCL lookup/API failed: {error_text}", debug_lines)
+
+    return error_schedule_result(row, error_text)
+
+
+def backup_or_zero_reports_schedule_result(config: JsonDict, row: dict, debug_lines: list[str]) -> ScheduleResult | None:
+    backup_cfg = config.get("comparison", {}).get("wowprogress_backup", {})
+    use_on_zero = bool(backup_cfg.get("use_when_wcl_reports_zero", True))
+    if not use_on_zero:
+        return None
+
+    match = find_wowprogress_backup_match(
+        config,
+        guild=row["guild"],
+        realm=row["realm"],
+        region=row["region"],
+    )
+    if match is None:
+        return None
+
+    return wowprogress_backup_schedule_result(row, match, "WCL returned 0 public reports", debug_lines)
+
+def error_schedule_result(row: dict, error_text: str) -> ScheduleResult:
+    return ScheduleResult(
+        guild=row["guild"],
+        realm=row["realm"],
+        region=row["region"],
+        rank=row.get("rank"),
+        reports_found=0,
+        reports_used_for_schedule=0,
+        progression_cutoff_date=str(row.get("endboss_kill_date") or ""),
+        progression_cutoff_source=str(row.get("endboss_kill_source") or ""),
+        reports_after_cutoff_excluded=0,
+        raid_nights_found=0,
+        active_weeks=0,
+        inferred_days_per_week=None,
+        average_raid_days_per_active_week=None,
+        logged_window_hours_per_week=None,
+        inferred_hours_per_week=None,
+        inferred_raid_days="",
+        is_likely_two_day=False,
+        candidate_needs_deep_time_review=False,
+        schedule_source="wcl_report_list_candidate_filter",
+        schedule_confidence="error",
+        reason=error_text,
+        example_nights="",
+        notes="",
+    )
+
+def report_is_evening_candidate(report: JsonDict, config: JsonDict, tz_name: str) -> bool:
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    start = report_start(report)
+    end = report_end(report)
+    if not start or not end or end <= start:
+        return False
+
+    dt = local_dt(start, tz_name)
+    min_hour = int(scan_cfg.get("raid_start_hour_min", 15))
+    max_hour = int(scan_cfg.get("raid_start_hour_max", 23))
+
+    if dt.hour < min_hour or dt.hour > max_hour:
+        return False
+
+    # Keep zone filtering deliberately loose. Some real raid reports can have bad report-level zone metadata.
+    return True
+
+
+def report_date_utc_from_ms(ms: int | None) -> str:
+    if not ms:
+        return ""
+    from datetime import timezone
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat()
+
+
+def absolute_fight_time_ms(report_start_ms: int, fight_time: int) -> int:
+    # WCL fight times are normally relative to report start. If already epoch ms, keep it.
+    return fight_time if fight_time > 1_000_000_000_000 else report_start_ms + fight_time
+
+
+def is_endboss_kill_fight(fight: JsonDict, config: JsonDict) -> bool:
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    names = [str(x).lower() for x in scan_cfg.get("endboss_encounter_names", ["Midnight Falls", "Lura"])]
+    name = str(fight.get("name") or "").lower()
+    if not bool(fight.get("kill", False)):
+        return False
+    if int(fight.get("difficulty") or 0) != 5:
+        return False
+    return any(n and n in name for n in names)
+
+
+def find_endboss_kill_from_wcl_reports(
+    conn,
+    config: JsonDict,
+    row: dict,
+    reports: list[JsonDict],
+    debug_lines: list[str],
+) -> tuple[int | None, str, str]:
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    if not scan_cfg.get("fallback_find_endboss_kill_from_wcl", True):
+        return None, "", ""
+
+    guild = row["guild"]
+    realm = row["realm"]
+    region = row["region"]
+    ttl = float(scan_cfg.get("endboss_kill_cache_ttl_hours", 720))
+
+    cached = get_cached_endboss_kill(conn, guild, realm, region, ttl)
+    if cached is not None:
+        if cached.get("found"):
+            debug_lines.append(f"{guild}-{realm}-{region} :: endboss kill cache hit :: {cached.get('kill_date')}")
+            return int(cached["kill_timestamp_ms"]), cached.get("kill_date", ""), cached.get("source", "wcl_endboss_kill_cache")
+        debug_lines.append(f"{guild}-{realm}-{region} :: endboss kill cache hit :: not found")
+        return None, "", ""
+
+    client = build_v2_client(config)
+    checked = 0
+    sorted_reports = sorted(
+        [r for r in reports if report_start(r) and report_code(r)],
+        key=lambda r: report_start(r),
+    )
+
+    for report in sorted_reports:
+        code = report_code(report)
+        try:
+            data = client.fetch_report_fights(code)
+            checked += 1
+        except Exception as e:
+            debug_lines.append(f"{guild}-{realm}-{region} :: endboss kill lookup failed report={code} :: {type(e).__name__}: {e}")
+            continue
+
+        report_start_ms = int(data.get("startTime") or report_start(report) or 0)
+        for fight in data.get("fights", []):
+            if is_endboss_kill_fight(fight, config):
+                kill_ms = absolute_fight_time_ms(report_start_ms, int(fight.get("endTime") or 0))
+                kill_date = report_date_utc_from_ms(kill_ms)
+                source = f"wcl_fight_summary:{code}"
+                upsert_endboss_kill_cache(conn, guild, realm, region, kill_ms, kill_date, source, checked, True)
+                debug_lines.append(f"{guild}-{realm}-{region} :: endboss kill found from WCL :: {kill_date} report={code}")
+                return kill_ms, kill_date, source
+
+    upsert_endboss_kill_cache(conn, guild, realm, region, None, "", "wcl_fight_summary:not_found", checked, False)
+    debug_lines.append(f"{guild}-{realm}-{region} :: endboss kill not found from WCL after {checked} reports")
+    return None, "", ""
+
+
+def progression_cutoff_ms_from_row(row: dict, config: JsonDict) -> tuple[int | None, str]:
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    if not scan_cfg.get("use_guild_endboss_kill_cutoff", True):
+        return None, ""
+
+    raw = row.get("endboss_kill_timestamp_ms")
+    if raw in (None, ""):
+        return None, ""
+
+    try:
+        kill_ms = int(raw)
+    except Exception:
+        return None, ""
+
+    include_kill_day = bool(scan_cfg.get("include_kill_day_in_schedule", True))
+    if include_kill_day:
+        # Include reports up to the end of the UTC kill day. This avoids cutting out
+        # earlier same-day progression logs if the kill happened late in the evening.
+        from datetime import datetime, timezone, time as dt_time
+        kill_date = datetime.fromtimestamp(kill_ms / 1000, tz=timezone.utc).date()
+        end_of_day = datetime.combine(kill_date, dt_time.max, tzinfo=timezone.utc)
+        cutoff_ms = int(end_of_day.timestamp() * 1000)
+    else:
+        cutoff_ms = kill_ms
+
+    source = row.get("endboss_kill_source") or "discovery_endboss_kill"
+    return cutoff_ms, str(source)
+
+
+def filter_reports_to_progression_cutoff(
+    conn,
+    reports: list[JsonDict],
+    row: dict,
+    config: JsonDict,
+    debug_lines: list[str],
+) -> tuple[list[JsonDict], int, str, str]:
+    cutoff_ms, source = progression_cutoff_ms_from_row(row, config)
+
+    if not cutoff_ms:
+        cutoff_ms, cutoff_date_hint, source = find_endboss_kill_from_wcl_reports(
+            conn, config, row, reports, debug_lines
+        )
+    else:
+        cutoff_date_hint = ""
+
+    if not cutoff_ms:
+        return reports, 0, "", ""
+
+    filtered = [r for r in reports if report_start(r) and report_start(r) <= cutoff_ms]
+    excluded = len(reports) - len(filtered)
+    cutoff_date = cutoff_date_hint or report_date_utc_from_ms(cutoff_ms)
+    debug_lines.append(
+        f"{row['guild']}-{row['realm']}-{row['region']} :: progression cutoff {cutoff_date} "
+        f"source={source} excluded_reports_after_cutoff={excluded}"
+    )
+    return filtered, excluded, cutoff_date, source
+
+
+def build_nights_from_reports(reports: list[JsonDict], config: JsonDict, tz_name: str) -> list[NightSummary]:
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    min_span_ms = int(scan_cfg.get("min_raid_night_span_minutes", 90)) * 60 * 1000
+    max_span_ms = int(float(scan_cfg.get("max_raid_night_span_hours", 8)) * 60 * 60 * 1000)
+
+    by_date: dict[str, list[JsonDict]] = {}
+
+    for report in reports:
+        if not report_is_evening_candidate(report, config, tz_name):
+            continue
+        d = local_date(report_start(report), tz_name)
+        by_date.setdefault(d, []).append(report)
+
+    nights: list[NightSummary] = []
+
+    for date_text, items in sorted(by_date.items()):
+        starts = [report_start(r) for r in items if report_start(r)]
+        ends = [report_end(r) for r in items if report_end(r)]
+        if not starts or not ends:
+            continue
+
+        start_ms = min(starts)
+        end_ms = max(ends)
+        span_ms = end_ms - start_ms
+
+        if span_ms < min_span_ms:
+            continue
+
+        if span_ms > max_span_ms:
+            # Cap obviously over-long page/report spans instead of letting one bad report ruin weekly hours.
+            end_ms = start_ms + max_span_ms
+            span_ms = max_span_ms
+
+        codes = ", ".join(sorted({report_code(r) for r in items if report_code(r)}))
+        zones = ", ".join(sorted({report_zone_name(r) for r in items if report_zone_name(r)}))
+
+        nights.append(
+            NightSummary(
+                date=date_text,
+                weekday=weekday_name(date_text),
+                week_start=week_start_date(date_text),
+                start_ms=start_ms,
+                end_ms=end_ms,
+                hours=round(span_ms / 3600000, 2),
+                report_count=len(items),
+                report_codes=codes,
+                zone_names=zones,
+            )
+        )
+
+    return nights
+
+
+def classify_schedule(
+    guild: str,
+    realm: str,
+    region: str,
+    rank: int | None,
+    reports: list[JsonDict],
+    nights: list[NightSummary],
+    config: JsonDict,
+    source: str,
+    progression_cutoff_date: str = "",
+    progression_cutoff_source: str = "",
+    reports_after_cutoff_excluded: int = 0,
+) -> ScheduleResult:
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+
+    by_week: dict[str, list[NightSummary]] = {}
+    for night in nights:
+        by_week.setdefault(night.week_start, []).append(night)
+
+    active_weeks = len(by_week)
+
+    if not nights or active_weeks == 0:
+        return ScheduleResult(
+            guild=guild,
+            realm=realm,
+            region=region,
+            rank=rank,
+            reports_found=len(reports),
+            reports_used_for_schedule=0,
+            progression_cutoff_date=progression_cutoff_date,
+            progression_cutoff_source=progression_cutoff_source,
+            reports_after_cutoff_excluded=reports_after_cutoff_excluded,
+            raid_nights_found=0,
+            active_weeks=0,
+            inferred_days_per_week=None,
+            average_raid_days_per_active_week=None,
+            logged_window_hours_per_week=None,
+            inferred_hours_per_week=None,
+            inferred_raid_days="",
+            is_likely_two_day=False,
+            candidate_needs_deep_time_review=False,
+            schedule_source="wcl_report_list_candidate_filter",
+            schedule_confidence="none",
+            reason="No report-list raid-night candidates passed the cheap first-pass filters.",
+            example_nights="",
+            notes=f"report_source={source}; progression_cutoff={progression_cutoff_date or 'none'}; excluded_after_cutoff={reports_after_cutoff_excluded}; cheap report-list candidate scan only; no fight summaries fetched",
+        )
+
+    weekly_nights = [len(items) for items in by_week.values()]
+    weekly_hours = [sum(n.hours for n in items) for items in by_week.values()]
+
+    med_nights = float(median(weekly_nights))
+    avg_nights = round(sum(weekly_nights) / len(weekly_nights), 2)
+    med_hours = round(float(median(weekly_hours)), 2)
+
+    day_counts: dict[str, int] = {}
+    for night in nights:
+        day_counts[night.weekday] = day_counts.get(night.weekday, 0) + 1
+
+    ordered_days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    common_days = [d for d in ordered_days if day_counts.get(d, 0) > 0]
+    common_days = sorted(common_days, key=lambda d: (-day_counts[d], ordered_days.index(d)))
+    inferred_days = ", ".join(common_days[:4])
+
+    min_active_weeks = int(scan_cfg.get("minimum_active_weeks", 4))
+    min_nights = float(scan_cfg.get("candidate_two_day_min_nights_per_week", 1.5))
+    max_nights = float(scan_cfg.get("candidate_two_day_max_nights_per_week", 2.5))
+    min_hours = float(scan_cfg.get("candidate_peer_min_logged_hours_per_week", 4.5))
+    max_hours = float(scan_cfg.get("candidate_peer_max_logged_hours_per_week", 9.0))
+
+    # First pass selection is deliberately broad. It is a candidate filter only.
+    # Deeper Mythic fight-time validation should happen after this selection.
+    is_likely_two = (
+        active_weeks >= min_active_weeks
+        and min_nights <= avg_nights <= max_nights
+        and min_hours <= med_hours <= max_hours
+    )
+
+    if active_weeks < min_active_weeks:
+        confidence = "low"
+        reason = f"Only {active_weeks} active weeks found; minimum is {min_active_weeks}."
+    elif is_likely_two:
+        confidence = "medium"
+        reason = f"Average {avg_nights:g} raid days/active week; median {med_nights:g} nights/week and {med_hours:g} logged-window hours/week. Needs deep time review."
+    else:
+        confidence = "medium"
+        reason = f"Average {avg_nights:g} raid days/active week; median {med_nights:g} nights/week and {med_hours:g} logged-window hours/week; outside broad first-pass candidate filter."
+
+    examples = []
+    for n in nights[:8]:
+        start = local_dt(n.start_ms, scan_cfg.get("timezone", "Europe/London")).strftime("%H:%M")
+        end = local_dt(n.end_ms, scan_cfg.get("timezone", "Europe/London")).strftime("%H:%M")
+        examples.append(f"{n.date} {n.weekday} {start}-{end} logged_window={n.hours}h")
+
+    return ScheduleResult(
+        guild=guild,
+        realm=realm,
+        region=region,
+        rank=rank,
+        reports_found=len(reports),
+        reports_used_for_schedule=sum(n.report_count for n in nights),
+        progression_cutoff_date=progression_cutoff_date,
+        progression_cutoff_source=progression_cutoff_source,
+        reports_after_cutoff_excluded=reports_after_cutoff_excluded,
+        raid_nights_found=len(nights),
+        active_weeks=active_weeks,
+        inferred_days_per_week=med_nights,
+        average_raid_days_per_active_week=avg_nights,
+        logged_window_hours_per_week=med_hours,
+        inferred_hours_per_week=med_hours,
+        inferred_raid_days=inferred_days,
+        is_likely_two_day=is_likely_two,
+        candidate_needs_deep_time_review=is_likely_two,
+        schedule_source="wcl_report_list_candidate_filter",
+        schedule_confidence=confidence,
+        reason=reason,
+        example_nights=" | ".join(examples),
+        notes=f"report_source={source}; progression_cutoff={progression_cutoff_date or 'none'}; excluded_after_cutoff={reports_after_cutoff_excluded}; cheap report-list candidate scan only; no fight summaries fetched",
+    )
+
+
+def rows_from_discovery(config: JsonDict, logger, conn=None) -> list[dict]:
+    backup_cfg = config.get("comparison", {}).get("wowprogress_backup", {})
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+
+    use_backup_source = bool(backup_cfg.get("use_as_schedule_scan_source", False)) or (
+        scan_cfg.get("source_mode") == "wowprogress_backup_above_own_declared_1_2"
+    )
+
+    if use_backup_source:
+        rows, meta = rows_from_wowprogress_backup_for_schedule_scan(config)
+        if logger:
+            logger.print("Using WoWProgress backup as schedule-scan source.")
+            logger.print(f"Backup rows in file: {meta.get('rows_in_backup')}")
+            logger.print(f"Own WoWProgress rank used: {meta.get('own_rank')}")
+            logger.print(f"Declared 1-2 day guilds selected above own: {meta.get('selected')}")
+            if meta.get("region_filter"):
+                logger.print(f"Region filter: {meta.get('region_filter')}")
+            else:
+                logger.print("Region filter: world/all")
+        return rows
+
+    discovery = config.get("comparison", {}).get("discovery", {})
+    saved_profile = get_guild_profile_from_settings()
+
+    own_guild = (discovery.get("own_guild") or (saved_profile.name if saved_profile else "")).strip()
+    own_realm = (discovery.get("own_realm") or (saved_profile.realm if saved_profile else "")).strip()
+    own_region = (discovery.get("own_region") or (saved_profile.region if saved_profile else "EU")).strip().upper()
+
+    discovered = discover_guilds(config, logger=logger)
+    selected = select_guilds_around_own(
+        guilds=discovered,
+        own_guild=own_guild,
+        own_realm=own_realm,
+        own_region=own_region,
+        above=int(discovery.get("guilds_above_own", 50)),
+        below=int(discovery.get("guilds_below_own", 0)),
+        max_used=int(discovery.get("max_discovered_guilds_used", 50)),
+    )
+
+    write_discovered_guilds(discovery.get("output_file", "output/comparison/discovered_guilds.csv"), selected)
+    if conn is not None:
+        upsert_discovered_guilds(conn, selected)
+
+    return [
+        {
+            "guild": g.guild,
+            "realm": g.realm,
+            "region": g.region,
+            "rank": g.rank,
+            "endboss_kill_timestamp_ms": getattr(g, "endboss_kill_timestamp_ms", None),
+            "endboss_kill_date": getattr(g, "endboss_kill_date", ""),
+            "endboss_kill_source": getattr(g, "endboss_kill_source", ""),
+        }
+        for g in selected
+    ]
+
+
+def filter_unprocessed_guild_rows(conn, config: JsonDict, guild_rows: list[dict], logger) -> list[dict]:
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    if not scan_cfg.get("scan_only_unprocessed_guilds", True):
+        return guild_rows
+
+    skip_existing = bool(scan_cfg.get("skip_existing_schedule_results", True))
+    if not skip_existing:
+        return guild_rows
+
+    retry_errors = bool(scan_cfg.get("retry_error_results", False))
+    statuses = get_schedule_result_statuses(conn)
+
+    filtered: list[dict] = []
+    skipped = 0
+
+    for row in guild_rows:
+        if should_skip_existing_schedule_result(
+            statuses,
+            guild=row["guild"],
+            realm=row["realm"],
+            region=row["region"],
+            retry_errors=retry_errors,
+        ):
+            skipped += 1
+            continue
+        filtered.append(row)
+
+    if logger:
+        logger.print(f"Skipped already schedule-scanned guilds: {skipped}")
+        logger.print(f"Unprocessed guilds remaining in selected schedule-scan source: {len(filtered)}")
+
+    return filtered
+
+
+def write_schedule_results(path: str | Path, rows: list[ScheduleResult]) -> None:
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    fieldnames = [
+        "guild",
+        "realm",
+        "region",
+        "rank",
+        "reports_found",
+        "reports_used_for_schedule",
+        "progression_cutoff_date",
+        "progression_cutoff_source",
+        "reports_after_cutoff_excluded",
+        "raid_nights_found",
+        "active_weeks",
+        "inferred_days_per_week",
+        "average_raid_days_per_active_week",
+        "logged_window_hours_per_week",
+        "inferred_hours_per_week",
+        "inferred_raid_days",
+        "is_likely_two_day",
+        "candidate_needs_deep_time_review",
+        "schedule_source",
+        "schedule_confidence",
+        "reason",
+        "example_nights",
+        "notes",
+    ]
+
+    with output.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(asdict(row))
+
+
+def run_schedule_scan(config: JsonDict, logger) -> None:
+    scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    if not scan_cfg.get("enabled", True):
+        logger.print("Schedule scan is disabled in config.json.")
+        return
+
+    logger.print("Schedule scan selected.")
+    logger.print("v1.6.20 scans declared 1-2 day guilds above you from the WoWProgress backup list.")
+    logger.print("Default mode is declared-only and does not call WCL, so it uses 0 WCL tokens.")
+
+    parallel_enabled = bool(scan_cfg.get("parallel_schedule_scan", True))
+    worker_count = max(1, int(scan_cfg.get("schedule_scan_workers", 4)))
+    if parallel_enabled and worker_count > 1:
+        logger.print(f"Parallel WCL report-list fetching enabled: {worker_count} workers.")
+    else:
+        logger.print("Parallel fetching disabled; using single-threaded schedule scan.")
+
+    conn = connect_schedule_db(config)
+
+    guild_rows = rows_from_discovery(config, logger=logger, conn=conn)
+    if not guild_rows:
+        logger.print("No guild rows available for schedule scan.")
+        conn.close()
+        return
+
+    guild_rows = filter_unprocessed_guild_rows(conn, config, guild_rows, logger)
+    if not guild_rows:
+        logger.print("No unprocessed guilds left in the selected schedule-scan source.")
+        logger.print("Increase the backup source limit or set skip_existing_schedule_results=false to rescan.")
+        conn.close()
+        return
+
+    max_guilds = int(scan_cfg.get("max_guilds_per_run", 25))
+    selected_rows = guild_rows[:max_guilds]
+    output_file = scan_cfg.get("output_file", "output/comparison/schedule_scan.csv")
+    debug_file = scan_cfg.get("debug_file", "output/comparison/schedule_scan_debug.txt")
+    tz_name = scan_cfg.get("timezone") or config.get("season", {}).get("timezone", "Europe/London")
+    season_config = config.get("season", {})
+    start_ms, end_ms = season_range_ms(season_config)
+
+    debug_lines: list[str] = []
+    results: list[ScheduleResult] = []
+
+    cache_hits = 0
+    api_jobs: list[dict] = []
+
+    backup_cfg = config.get("comparison", {}).get("wowprogress_backup", {})
+    declared_only_scan = bool(backup_cfg.get("declared_only_scan", False)) and not bool(backup_cfg.get("wcl_enrichment_enabled", False))
+    backup_source_rows = bool(backup_cfg.get("use_as_schedule_scan_source", False)) or (
+        scan_cfg.get("source_mode") == "wowprogress_backup_above_own_declared_1_2"
+    )
+
+    if backup_source_rows and declared_only_scan:
+        logger.print("Declared-only WoWProgress backup scan enabled.")
+        logger.print("WCL enrichment disabled: this run will use 0 WCL API calls/tokens.")
+
+        for row in selected_rows:
+            result = declared_only_backup_schedule_result(row, debug_lines)
+            upsert_schedule_result(conn, result)
+            replace_raid_nights(conn, row["guild"], row["realm"], row["region"], [])
+            results.append(result)
+
+        conn.close()
+        results = sorted(results, key=lambda r: (r.rank is None, r.rank or 999999, r.guild.lower()))
+        write_schedule_results(output_file, results)
+        Path(debug_file).parent.mkdir(parents=True, exist_ok=True)
+
+        backup_matches = len(results)
+        debug_lines.append(
+            f"RUN SUMMARY selected={len(selected_rows)} cache_hits=0 api_fetches=0 "
+            f"parallel=False workers=0 public_wcl_results=0 wowprogress_backup_matches={backup_matches} errors=0 "
+            f"declared_only_scan=True"
+        )
+        Path(debug_file).write_text("\n".join(debug_lines) + "\n", encoding="utf-8")
+
+        logger.print(f"Schedule scan output: {output_file}")
+        logger.print(f"Schedule scan debug: {debug_file}")
+        logger.print("Cache hits this run: 0")
+        logger.print("WCL API fetches this run: 0")
+        logger.print(f"WoWProgress backup matches this run: {backup_matches}")
+        logger.print("Public WCL results this run: 0")
+        logger.print("Errors with no backup this run: 0")
+        logger.print(f"Likely 2-day guilds in this run: {len(results)}/{len(results)}")
+        return
+
+    # Main thread cache pass. This avoids sending cached guilds to workers.
+    for row in selected_rows:
+        guild = row["guild"]
+        realm = row["realm"]
+        region = row["region"]
+        cached = load_cached_or_legacy_reports_main_thread(
+            conn=conn,
+            config=config,
+            guild=guild,
+            realm=realm,
+            region=region,
+            debug_lines=debug_lines,
+        )
+        if cached is None:
+            api_jobs.append(row)
+            continue
+
+        cache_hits += 1
+        reports, source = cached
+        logger.print(f"[cache {cache_hits}] {guild}-{realm}-{region}: {len(reports)} reports")
+        try:
+            result = classify_and_store_schedule_result(
+                conn=conn,
+                config=config,
+                row=row,
+                reports=reports,
+                source=source,
+                tz_name=tz_name,
+                debug_lines=debug_lines,
+            )
+        except Exception as e:
+            debug_lines.append(f"{guild}-{realm}-{region} :: ERROR :: {type(e).__name__}: {e}")
+            result = backup_or_error_schedule_result(config, row, f"{type(e).__name__}: {e}", debug_lines)
+            upsert_schedule_result(conn, result)
+        results.append(result)
+
+    # API pass. Workers fetch only; main thread stores cache/results.
+    api_fetches = 0
+    if api_jobs:
+        logger.print(f"WCL API fetches needed this run: {len(api_jobs)}")
+    else:
+        logger.print("No WCL API fetches needed; all selected guilds came from cache.")
+
+    if api_jobs and parallel_enabled and worker_count > 1:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            future_map = {
+                executor.submit(fetch_guild_reports_api_worker, row, config): row
+                for row in api_jobs
+            }
+            completed = 0
+            for future in as_completed(future_map):
+                completed += 1
+                row = future_map[future]
+                guild = row["guild"]
+                realm = row["realm"]
+                region = row["region"]
+
+                try:
+                    job = future.result()
+                except Exception as e:
+                    debug_lines.append(f"{guild}-{realm}-{region} :: WORKER ERROR :: {type(e).__name__}: {e}")
+                    result = backup_or_error_schedule_result(config, row, f"{type(e).__name__}: {e}", debug_lines)
+                    upsert_schedule_result(conn, result)
+                    results.append(result)
+                    logger.print(f"[api {completed}/{len(api_jobs)}] ERROR {guild}-{realm}-{region}")
+                    continue
+
+                debug_lines.extend(job.debug_lines)
+
+                if job.error:
+                    result = backup_or_error_schedule_result(config, row, job.error, debug_lines)
+                    upsert_schedule_result(conn, result)
+                    results.append(result)
+                    logger.print(f"[api {completed}/{len(api_jobs)}] ERROR {guild}-{realm}-{region}")
+                    continue
+
+                api_fetches += 1
+                upsert_report_cache(conn, guild, realm, region, start_ms, end_ms, job.reports, "wcl_v2_api_parallel")
+                debug_lines.append(f"{guild}-{realm}-{region} :: reports api fetch stored in sqlite :: {len(job.reports)} reports")
+
+                try:
+                    result = classify_and_store_schedule_result(
+                        conn=conn,
+                        config=config,
+                        row=row,
+                        reports=job.reports,
+                        source="wcl_v2_api_parallel",
+                        tz_name=tz_name,
+                        debug_lines=debug_lines,
+                    )
+                except Exception as e:
+                    debug_lines.append(f"{guild}-{realm}-{region} :: ERROR :: {type(e).__name__}: {e}")
+                    result = backup_or_error_schedule_result(config, row, f"{type(e).__name__}: {e}", debug_lines)
+                    upsert_schedule_result(conn, result)
+
+                results.append(result)
+                logger.print(f"[api {completed}/{len(api_jobs)}] {guild}-{realm}-{region}: {len(job.reports)} reports")
+
+    elif api_jobs:
+        # Single-threaded fallback path.
+        client = build_v2_client(config)
+        for idx, row in enumerate(api_jobs, start=1):
+            guild = row["guild"]
+            realm = row["realm"]
+            region = row["region"]
+            logger.print(f"[api {idx}/{len(api_jobs)}] Cheap report-list candidate scan: {guild}-{realm}-{region}")
+
+            try:
+                reports_raw = client.fetch_guild_reports(
+                    guild_name=guild,
+                    guild_server_slug=slugify_realm(realm),
+                    guild_server_region=region.upper(),
+                    start_time=start_ms,
+                    end_time=end_ms,
+                    max_pages=20,
+                )
+                reports = v2_reports_to_v1_meta(reports_raw)
+                api_fetches += 1
+                upsert_report_cache(conn, guild, realm, region, start_ms, end_ms, reports, "wcl_v2_api")
+                debug_lines.append(f"{guild}-{realm}-{region} :: reports api fetch stored in sqlite :: {len(reports)} reports")
+
+                result = classify_and_store_schedule_result(
+                    conn=conn,
+                    config=config,
+                    row=row,
+                    reports=reports,
+                    source="wcl_v2_api",
+                    tz_name=tz_name,
+                    debug_lines=debug_lines,
+                )
+
+            except Exception as e:
+                debug_lines.append(f"{guild}-{realm}-{region} :: ERROR :: {type(e).__name__}: {e}")
+                result = backup_or_error_schedule_result(config, row, f"{type(e).__name__}: {e}", debug_lines)
+                upsert_schedule_result(conn, result)
+
+            results.append(result)
+
+        save_client_token(client)
+
+    conn.close()
+
+    # Keep output ordered by rank where possible, not by worker completion order.
+    results = sorted(results, key=lambda r: (r.rank is None, r.rank or 999999, r.guild.lower()))
+
+    write_schedule_results(output_file, results)
+    Path(debug_file).parent.mkdir(parents=True, exist_ok=True)
+    backup_matches = sum(1 for r in results if r.schedule_source == "wowprogress_screenshot_backup_declared_only")
+    public_wcl_measured = sum(1 for r in results if r.schedule_source != "wowprogress_screenshot_backup_declared_only" and r.schedule_confidence != "error")
+    error_count = sum(1 for r in results if r.schedule_confidence == "error")
+    debug_lines.append(
+        f"RUN SUMMARY selected={len(selected_rows)} cache_hits={cache_hits} api_fetches={api_fetches} "
+        f"parallel={parallel_enabled and worker_count > 1} workers={worker_count} "
+        f"public_wcl_results={public_wcl_measured} wowprogress_backup_matches={backup_matches} errors={error_count}"
+    )
+    Path(debug_file).write_text("\n".join(debug_lines) + "\n", encoding="utf-8")
+
+    likely_count = sum(1 for r in results if r.is_likely_two_day)
+    logger.print(f"Schedule scan output: {output_file}")
+    logger.print(f"Schedule scan debug: {debug_file}")
+    logger.print(f"Cache hits this run: {cache_hits}")
+    logger.print(f"WCL API fetches this run: {api_fetches}")
+    logger.print(f"WoWProgress backup matches this run: {backup_matches}")
+    logger.print(f"Public WCL results this run: {public_wcl_measured}")
+    logger.print(f"Errors with no backup this run: {error_count}")
+    logger.print(f"Likely 2-day guilds in this run: {likely_count}/{len(results)}")
+
