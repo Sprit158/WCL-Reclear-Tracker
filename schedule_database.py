@@ -9,7 +9,7 @@ import time
 from settings_manager import get_global_settings_dir
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 def database_path(config: JsonDict) -> Path:
