@@ -463,6 +463,39 @@ def get_cached_reports(
         return None
 
 
+def get_latest_cached_reports(
+    conn: sqlite3.Connection,
+    guild: str,
+    realm: str,
+    region: str,
+    season_start_ms: int,
+    ttl_hours: float,
+) -> list[JsonDict] | None:
+    """Return the newest fresh report-list cache despite a moving season end date."""
+
+    row = conn.execute(
+        """
+        SELECT reports_json, fetched_at_unix
+        FROM schedule_report_cache
+        WHERE guild_key = ?
+          AND season_start_ms = ?
+        ORDER BY fetched_at_unix DESC
+        LIMIT 1
+        """,
+        (guild_key(guild, realm, region), season_start_ms),
+    ).fetchone()
+    if not row:
+        return None
+
+    age_seconds = time.time() - int(row["fetched_at_unix"])
+    if ttl_hours >= 0 and age_seconds > ttl_hours * 3600:
+        return None
+    try:
+        return json.loads(row["reports_json"])
+    except Exception:
+        return None
+
+
 def upsert_report_cache(
     conn: sqlite3.Connection,
     guild: str,
