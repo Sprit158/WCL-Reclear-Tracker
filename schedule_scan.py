@@ -696,7 +696,8 @@ def filter_reports_to_progression_cutoff(
 
 def build_nights_from_reports(reports: list[JsonDict], config: JsonDict, tz_name: str) -> list[NightSummary]:
     scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
-    min_span_ms = int(scan_cfg.get("min_raid_night_span_minutes", 90)) * 60 * 1000
+    # Short farm/kill logs still prove that the guild raided on that date.
+    min_span_ms = int(scan_cfg.get("minimum_counted_raid_day_minutes", 15)) * 60 * 1000
     max_span_ms = int(float(scan_cfg.get("max_raid_night_span_hours", 8)) * 60 * 60 * 1000)
 
     by_date: dict[str, list[JsonDict]] = {}
@@ -799,7 +800,7 @@ def classify_schedule(
     weekly_hours = [sum(n.hours for n in items) for items in by_week.values()]
 
     med_nights = float(median(weekly_nights))
-    avg_nights = round(sum(weekly_nights) / len(weekly_nights), 2)
+    observed_avg_nights = round(sum(weekly_nights) / len(weekly_nights), 2)
     med_hours = round(float(median(weekly_hours)), 2)
 
     # "First month" means the first four reset weeks containing the configured
@@ -818,26 +819,35 @@ def classify_schedule(
     first_month_avg_days = round(len(first_month_night_dates) / 4, 2)
 
     day_counts: dict[str, int] = {}
+    day_weeks: dict[str, set[str]] = {}
     for night in nights:
         day_counts[night.weekday] = day_counts.get(night.weekday, 0) + 1
+        day_weeks.setdefault(night.weekday, set()).add(night.week_start)
 
     ordered_days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    common_days = [d for d in ordered_days if day_counts.get(d, 0) > 0]
-    common_days = sorted(common_days, key=lambda d: (-day_counts[d], ordered_days.index(d)))
-    inferred_days = ", ".join(common_days[:4])
+    core_fraction = float(scan_cfg.get("core_raid_day_min_active_week_fraction", 0.55))
+    core_days = [
+        day for day in ordered_days
+        if len(day_weeks.get(day, set())) / active_weeks >= core_fraction
+    ]
+    inferred_days = ", ".join(core_days)
+    core_day_set = set(core_days)
+    overtime_nights = [night for night in nights if night.weekday not in core_day_set]
+    estimated_avg_nights = round(len(core_days) + len(overtime_nights) / active_weeks, 2)
+    if not core_days:
+        estimated_avg_nights = observed_avg_nights
 
     min_active_weeks = int(scan_cfg.get("minimum_active_weeks", 4))
     min_nights = float(scan_cfg.get("candidate_two_day_min_nights_per_week", 1.5))
-    max_nights = float(scan_cfg.get("candidate_two_day_max_nights_per_week", 2.5))
     min_hours = float(scan_cfg.get("candidate_peer_min_logged_hours_per_week", 4.5))
-    max_hours = float(scan_cfg.get("candidate_peer_max_logged_hours_per_week", 9.0))
 
-    # First pass selection is deliberately broad. It is a candidate filter only.
-    # Deeper Mythic fight-time validation should happen after this selection.
+    # Classify the recurring schedule separately from overtime. A two-core-day
+    # guild remains a two-day guild even when progression adds extra days.
     is_likely_two = (
         active_weeks >= min_active_weeks
-        and min_nights <= avg_nights <= max_nights
-        and min_hours <= med_hours <= max_hours
+        and len(core_days) == 2
+        and med_nights >= min_nights
+        and med_hours >= min_hours
     )
 
     if active_weeks < min_active_weeks:
@@ -845,10 +855,19 @@ def classify_schedule(
         reason = f"Only {active_weeks} active weeks found; minimum is {min_active_weeks}."
     elif is_likely_two:
         confidence = "medium"
-        reason = f"Average {avg_nights:g} raid days/active week; median {med_nights:g} nights/week and {med_hours:g} logged-window hours/week. Needs deep time review."
+        reason = (
+            f"Core days {inferred_days}; estimated {estimated_avg_nights:g} days/week including "
+            f"{len(overtime_nights)} overtime day(s) across {active_weeks} active weeks. "
+            f"Observed average {observed_avg_nights:g}; median {med_nights:g} nights/week and "
+            f"{med_hours:g} logged-window hours/week."
+        )
     else:
         confidence = "medium"
-        reason = f"Average {avg_nights:g} raid days/active week; median {med_nights:g} nights/week and {med_hours:g} logged-window hours/week; outside broad first-pass candidate filter."
+        reason = (
+            f"Detected {len(core_days)} recurring core day(s) ({inferred_days or 'none'}); "
+            f"estimated {estimated_avg_nights:g} days/week including overtime, observed average "
+            f"{observed_avg_nights:g}, median {med_nights:g} nights/week and {med_hours:g} logged-window hours/week."
+        )
 
     examples = []
     for n in nights[:8]:
@@ -869,7 +888,7 @@ def classify_schedule(
         raid_nights_found=len(nights),
         active_weeks=active_weeks,
         inferred_days_per_week=med_nights,
-        average_raid_days_per_active_week=avg_nights,
+        average_raid_days_per_active_week=estimated_avg_nights,
         logged_window_hours_per_week=med_hours,
         inferred_hours_per_week=med_hours,
         inferred_raid_days=inferred_days,
