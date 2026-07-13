@@ -26,7 +26,7 @@
     "location": "global_app_data"
   },
   "api_mode": "v1_api_key",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "logs": {
     "enabled": true,
     "folder": "logs",
@@ -219,7 +219,7 @@
     "schedule_scan": {
       "enabled": true,
       "use_inferred_schedule_from_logs": true,
-      "max_guilds_per_run": 25,
+      "max_guilds_per_run": 0,
       "sources": {
         "wcl_guild_page": true,
         "wcl_recruitment_page": true,
@@ -262,7 +262,7 @@
       "skip_existing_schedule_results": true,
       "retry_error_results": false,
       "scan_only_unprocessed_guilds": true,
-      "fast_mode_note": "v1.6.20 skips guilds already scanned in schedule_scan_results, so repeated option 15 runs process the next unscanned batch.",
+      "fast_mode_note": "A max_guilds_per_run value of 0 processes every eligible unscanned guild above the user's rank in one run.",
       "parallel_schedule_scan": true,
       "schedule_scan_workers": 4,
       "parallel_fetch_only": true,
