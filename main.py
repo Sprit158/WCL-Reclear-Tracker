@@ -36,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--realm", help="Realm name to use for this run.")
     parser.add_argument("--region", default=None, help="Region to use for this run, e.g. EU or US.")
     parser.add_argument("--save-guild", action="store_true", help="Save the --guild/--realm/--region values globally.")
+    parser.add_argument("--configure-guild", action="store_true", help="Save guild details without running the tracker.")
     parser.add_argument("--comparison", action="store_true", help="Run comparison mode using comparison_guilds.csv.")
     parser.add_argument("--setup-v2", action="store_true", help="Set up/test Warcraft Logs v2 OAuth Client ID/Secret.")
     parser.add_argument("--reset-v2", action="store_true", help="Remove saved Warcraft Logs v2 OAuth credentials and cached token.")
@@ -74,12 +75,83 @@ def main() -> None:
     args = build_parser().parse_args()
     config = load_config_early()
 
+    # Settings and housekeeping use only the Python standard library. Handle
+    # them before dependency setup so changing a guild/key never triggers a
+    # pandas/openpyxl installation or starts the tracker.
+    if any(
+        [
+            args.configure_guild,
+            args.reset_key,
+            args.reset_v2,
+            args.reset_guild,
+            args.clear_cache,
+            args.clear_output,
+            args.check_settings,
+        ]
+    ):
+        from settings_manager import (
+            GuildProfile,
+            clear_all_global_caches,
+            reset_saved_api_key,
+            reset_saved_guild_profile,
+            reset_saved_v2_credentials,
+            save_guild_profile_to_settings,
+        )
+
+        if args.configure_guild:
+            if not args.guild or not args.realm:
+                print("Guild name and realm are required.")
+                return
+            profile = GuildProfile(
+                name=args.guild.strip(),
+                realm=args.realm.strip(),
+                region=(args.region or config.get("guild", {}).get("region", "EU")).strip().upper(),
+            )
+            path = save_guild_profile_to_settings(profile)
+            print(f"Saved guild profile: {profile.name}-{profile.realm}-{profile.region}")
+            print(f"Settings file: {path}")
+            return
+
+        if args.reset_key:
+            removed = reset_saved_api_key()
+            print("Saved Warcraft Logs API key removed." if removed else "No saved Warcraft Logs API key was found.")
+            print("The main tracker will ask for a new key when it next needs one.")
+            return
+
+        if args.reset_v2:
+            removed = reset_saved_v2_credentials()
+            print("Saved Warcraft Logs v2 credentials removed." if removed else "No saved WCL v2 credentials were found.")
+            return
+
+        if args.reset_guild:
+            removed = reset_saved_guild_profile()
+            print("Saved guild profile removed." if removed else "No saved guild profile was found.")
+            print("The main tracker will ask for a guild on its next run.")
+            return
+
+        if args.clear_cache:
+            for label, removed, path in clear_all_global_caches():
+                print(f"{label}: {path}")
+                print("  cleared." if removed else "  nothing found.")
+            return
+
+        if args.clear_output:
+            removed_count, output_path = clear_output_files(config.get("output_folder", "output"))
+            print(f"Output folder: {output_path}")
+            print(f"Deleted {removed_count} old output file(s).")
+            return
+
+        if args.check_settings:
+            from diagnostics import run_check_settings
+
+            run_check_settings(config)
+            return
+
     ensure_dependencies(auto_install=bool(config.get("auto_install_dependencies", True)))
 
     from dotenv import load_dotenv
 
     from cache_manager import CacheError, ReportCache
-    from diagnostics import run_check_settings
     from exporter import export_outputs
     from guild_fetcher import (
         build_zone_lookup,
@@ -103,10 +175,6 @@ def main() -> None:
         SettingsError,
         get_global_cache_dir,
         clear_global_cache,
-        clear_all_global_caches,
-        reset_saved_api_key,
-        reset_saved_guild_profile,
-        reset_saved_v2_credentials,
         resolve_guild_profile,
         resolve_wcl_api_key,
         save_guild_profile_to_settings,
@@ -132,17 +200,6 @@ def main() -> None:
     logger.print(f"WCL Reclear Tracker v{version}")
     logger.print()
 
-    if args.reset_key:
-        removed = reset_saved_api_key()
-        logger.print("Saved Warcraft Logs API key removed." if removed else "No saved Warcraft Logs API key was found.")
-        logger.print("Run the program again to enter a new key.")
-        return
-
-    if args.reset_v2:
-        removed = reset_saved_v2_credentials()
-        logger.print("Saved Warcraft Logs v2 OAuth credentials/token removed." if removed else "No saved Warcraft Logs v2 credentials/token were found.")
-        return
-
     if args.setup_v2:
         run_v2_setup_test(config, logger)
         return
@@ -157,29 +214,6 @@ def main() -> None:
 
     if args.test_wowprogress:
         run_wowprogress_test(config, logger)
-        return
-
-    if args.reset_guild:
-        removed = reset_saved_guild_profile()
-        logger.print("Saved guild profile removed." if removed else "No saved guild profile was found.")
-        logger.print("Run the program again to enter a new guild, or use --guild and --realm.")
-        return
-
-    if args.clear_cache:
-        results = clear_all_global_caches()
-        for label, removed, path in results:
-            logger.print(f"{label}: {path}")
-            logger.print("  cleared." if removed else "  nothing found.")
-        return
-
-    if args.clear_output:
-        removed_count, output_path = clear_output_files(config.get("output_folder", "output"))
-        logger.print(f"Output folder: {output_path}")
-        logger.print(f"Deleted {removed_count} old output file(s).")
-        return
-
-    if args.check_settings:
-        run_check_settings(config)
         return
 
     mythic_difficulty = int(config.get("mythic_difficulty", 5))
