@@ -110,6 +110,15 @@ def report_zone_name(report: JsonDict) -> str:
     return str(report.get("zoneName") or "")
 
 
+def report_zone_id(report: JsonDict) -> int | None:
+    zone = report.get("zone")
+    value = zone.get("id") if isinstance(zone, dict) else report.get("zoneID", zone)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def local_dt(ms: int, tz_name: str) -> datetime:
     return datetime.fromtimestamp(ms / 1000, tz=ZoneInfo(tz_name))
 
@@ -824,6 +833,141 @@ def classify_schedule(
     )
 
 
+def filter_target_raid_reports(
+    reports: list[JsonDict],
+    config: JsonDict,
+) -> tuple[list[JsonDict], list[JsonDict], list[JsonDict]]:
+    """Split report-list metadata into target raid, unknown-zone and other-zone rows."""
+
+    zone_cfg = config.get("midnight_raid_zones", {})
+    target_ids = {int(value) for value in zone_cfg.get("zone_ids", []) if value is not None}
+    target_names = [str(value).lower() for value in zone_cfg.get("name_contains", []) if value]
+    target: list[JsonDict] = []
+    unknown: list[JsonDict] = []
+    other: list[JsonDict] = []
+
+    for report in reports:
+        zone_id = report_zone_id(report)
+        zone_name = report_zone_name(report).strip()
+        if zone_id is None and not zone_name:
+            unknown.append(report)
+        elif (zone_id is not None and zone_id in target_ids) or any(
+            name in zone_name.lower() for name in target_names
+        ):
+            target.append(report)
+        else:
+            other.append(report)
+
+    return target, unknown, other
+
+
+def points_used_between(before: JsonDict, after: JsonDict) -> int | None:
+    try:
+        start = int(before.get("pointsSpentThisHour"))
+        end = int(after.get("pointsSpentThisHour"))
+    except (TypeError, ValueError):
+        return None
+    if end < start:
+        return None  # The hourly window reset during the test.
+    return end - start
+
+
+def run_single_guild_schedule_test(
+    config: JsonDict,
+    logger,
+    guild: str | None = None,
+    realm: str | None = None,
+    region: str | None = None,
+) -> None:
+    """Measure the WCL point cost of schedule inference for exactly one guild."""
+
+    from api.wcl_api_v2 import WCLV2ApiError
+    from settings_manager import SettingsError
+
+    profile = get_guild_profile_from_settings()
+    guild = (guild or (profile.name if profile else "")).strip()
+    realm = (realm or (profile.realm if profile else "")).strip()
+    region = (region or (profile.region if profile else "EU")).strip().upper()
+    if not guild or not realm:
+        logger.print("No guild was supplied and no saved guild profile was found.")
+        logger.print("Save a guild first, or provide --guild and --realm with this test.")
+        return
+
+    start_ms, end_ms = season_range_ms(config.get("season", {}))
+    tz_name = config.get("season", {}).get("timezone", "Europe/London")
+    logger.print(f"One-guild schedule and WCL point-cost test: {guild}-{realm}-{region}")
+    logger.print("This fetches report-list metadata only; it does not fetch detailed fights or events.")
+
+    try:
+        client = build_v2_client(config)
+        before_payload = client.test_query()
+        before = before_payload.get("data", {}).get("rateLimitData", {})
+
+        reports_raw = client.fetch_guild_reports(
+            guild_name=guild,
+            guild_server_slug=slugify_realm(realm),
+            guild_server_region=region,
+            start_time=start_ms,
+            end_time=end_ms,
+            limit=100,
+            max_pages=20,
+        )
+
+        after_payload = client.test_query()
+        after = after_payload.get("data", {}).get("rateLimitData", {})
+        save_client_token(client)
+    except (SettingsError, WCLV2ApiError) as exc:
+        logger.print(f"One-guild schedule test failed: {exc}")
+        logger.print("Use Settings and maintenance to set up/test the WCL v2 Client ID and Secret.")
+        return
+
+    reports = v2_reports_to_v1_meta(reports_raw)
+    target_reports, unknown_reports, other_reports = filter_target_raid_reports(reports, config)
+    nights = build_nights_from_reports(target_reports, config, tz_name)
+    result = classify_schedule(
+        guild=guild,
+        realm=realm,
+        region=region,
+        rank=None,
+        reports=target_reports,
+        nights=nights,
+        config=config,
+        source="wcl_v2_single_guild_report_list_test",
+    )
+    used = points_used_between(before, after)
+    verdict = "YES - likely 2 days/week from available public logs" if result.is_likely_two_day else "NO - the available public logs do not match the 2-day thresholds"
+
+    lines = [
+        f"Guild: {guild}-{realm}-{region}",
+        f"Season: {config.get('season', {}).get('name', '')}",
+        f"Verdict: {verdict}",
+        f"Target-raid reports: {len(target_reports)}",
+        f"Unknown-zone reports excluded: {len(unknown_reports)}",
+        f"Other-zone reports excluded: {len(other_reports)}",
+        f"Raid nights found: {result.raid_nights_found}",
+        f"Active weeks: {result.active_weeks}",
+        f"Median raid nights/week: {result.inferred_days_per_week}",
+        f"Average raid nights/active week: {result.average_raid_days_per_active_week}",
+        f"Median logged-window hours/week: {result.logged_window_hours_per_week}",
+        f"Common raid days: {result.inferred_raid_days or 'none'}",
+        f"Reason: {result.reason}",
+        f"WCL hourly limit: {after.get('limitPerHour', before.get('limitPerHour', 'unknown'))}",
+        f"Points spent before: {before.get('pointsSpentThisHour', 'unknown')}",
+        f"Points spent after: {after.get('pointsSpentThisHour', 'unknown')}",
+        f"Points used by test: {used if used is not None else 'unknown (rate window reset or data unavailable)'}",
+        f"Points reset in: {after.get('pointsResetIn', 'unknown')}",
+        "Point measurement uses WCL rate-limit probes immediately before and after the report-list request.",
+        "This verifies the schedule visible in available public logs; missing/private logs can lower the measured days.",
+    ]
+
+    output = Path("output/comparison/single_guild_schedule_test.txt")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    for line in lines:
+        logger.print(line)
+    logger.print(f"Saved test details: {output}")
+
+
 def rows_from_discovery(config: JsonDict, logger, conn=None) -> list[dict]:
     backup_cfg = config.get("comparison", {}).get("wowprogress_backup", {})
     scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
@@ -990,15 +1134,22 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
         conn.close()
         return
 
-    guild_rows = filter_unprocessed_guild_rows(conn, config, guild_rows, logger)
+    if declared_only_mode:
+        logger.print("Declared-only mode rebuilds the complete eligible guild list each run.")
+    else:
+        guild_rows = filter_unprocessed_guild_rows(conn, config, guild_rows, logger)
     if not guild_rows:
         logger.print("No unprocessed guilds left in the selected schedule-scan source.")
         logger.print("Increase the backup source limit or set skip_existing_schedule_results=false to rescan.")
         conn.close()
         return
 
-    max_guilds = int(scan_cfg.get("max_guilds_per_run", 25))
-    selected_rows = guild_rows[:max_guilds]
+    max_guilds = int(scan_cfg.get("max_guilds_per_run", 0))
+    selected_rows = guild_rows if max_guilds <= 0 else guild_rows[:max_guilds]
+    if max_guilds <= 0:
+        logger.print(f"Processing all eligible guilds in this run: {len(selected_rows)}")
+    else:
+        logger.print(f"Processing this run's configured guild limit: {len(selected_rows)}/{len(guild_rows)}")
     output_file = scan_cfg.get("output_file", "output/comparison/schedule_scan.csv")
     debug_file = scan_cfg.get("debug_file", "output/comparison/schedule_scan_debug.txt")
     tz_name = scan_cfg.get("timezone") or config.get("season", {}).get("timezone", "Europe/London")
