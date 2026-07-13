@@ -19,7 +19,7 @@ from settings_manager import (
 )
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 def make_v2_config(config: JsonDict) -> WCLV2Config:
