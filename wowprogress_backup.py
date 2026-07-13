@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Any
 import csv
 import re
+import shutil
+
+from settings_manager import get_global_settings_dir, get_guild_profile_from_settings
 
 
 JsonDict = dict[str, Any]
@@ -66,12 +69,72 @@ def backup_path_from_config(config: JsonDict) -> Path:
     return Path(__file__).resolve().parent / path
 
 
+def global_backup_path(config: JsonDict) -> Path:
+    return get_global_settings_dir() / "data" / backup_path_from_config(config).name
+
+
+def ensure_wowprogress_backup(config: JsonDict) -> Path:
+    """Find the local dataset and persist it outside versioned app folders."""
+
+    preferred = backup_path_from_config(config)
+    durable = global_backup_path(config)
+
+    if preferred.exists() and preferred.stat().st_size > 0:
+        try:
+            durable.parent.mkdir(parents=True, exist_ok=True)
+            if not durable.exists() or durable.stat().st_size < preferred.stat().st_size:
+                shutil.copy2(preferred, durable)
+        except OSError:
+            pass
+        return preferred
+
+    if durable.exists() and durable.stat().st_size > 0:
+        try:
+            preferred.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(durable, preferred)
+            return preferred
+        except OSError:
+            return durable
+
+    # Recover automatically when the user unpacked a new version beside an old
+    # one. Keep the search shallow so startup remains fast and predictable.
+    app_root = Path(__file__).resolve().parent
+    filename = preferred.name
+    candidates: list[Path] = []
+    for pattern_root, pattern in [
+        (app_root.parent, f"*/data/{filename}"),
+        (app_root.parent.parent, f"*/build_v*/data/{filename}"),
+        (app_root.parent.parent, f"build_v*/data/{filename}"),
+    ]:
+        try:
+            candidates.extend(pattern_root.glob(pattern))
+        except OSError:
+            pass
+
+    candidates = [
+        path for path in candidates
+        if path != preferred and path.is_file() and path.stat().st_size > 0
+    ]
+    if candidates:
+        source = max(candidates, key=lambda path: (path.stat().st_size, path.stat().st_mtime))
+        try:
+            preferred.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, preferred)
+            durable.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, durable)
+            return preferred
+        except OSError:
+            return source
+
+    return preferred
+
+
 def load_wowprogress_backup(config: JsonDict) -> list[dict[str, str]]:
     settings = config.get("comparison", {}).get("wowprogress_backup", {})
     if not settings.get("enabled", True):
         return []
 
-    path = backup_path_from_config(config)
+    path = ensure_wowprogress_backup(config)
     if not path.exists():
         return []
 
@@ -146,9 +209,16 @@ def rows_from_wowprogress_backup_for_schedule_scan(config: JsonDict) -> tuple[li
     settings = config.get("comparison", {}).get("wowprogress_backup", {})
     rows = load_wowprogress_backup(config)
 
-    own_guild = normalise_guild(settings.get("own_guild", ""))
-    own_region = normalise_region(settings.get("own_region", "EU"))
-    own_realm = normalise_realm(settings.get("own_realm", ""))
+    saved_profile = get_guild_profile_from_settings()
+    configured_guild = str(settings.get("own_guild", "") or "").strip()
+    configured_realm = str(settings.get("own_realm", "") or "").strip()
+    configured_region = str(settings.get("own_region", "") or "").strip()
+    profile_is_source = bool(saved_profile and not configured_guild and not configured_realm)
+    own_guild = normalise_guild(configured_guild or (saved_profile.name if saved_profile else ""))
+    own_realm = normalise_realm(configured_realm or (saved_profile.realm if saved_profile else ""))
+    own_region = normalise_region(
+        saved_profile.region if profile_is_source else (configured_region or (saved_profile.region if saved_profile else "EU"))
+    )
 
     own_rank = None
     try:
@@ -230,6 +300,7 @@ def rows_from_wowprogress_backup_for_schedule_scan(config: JsonDict) -> tuple[li
 
     output.sort(key=lambda r: (r.get("rank") is None, int(r.get("rank") or 999999), str(r.get("guild", "")).lower()))
 
+    resolved_backup = ensure_wowprogress_backup(config)
     meta = {
         "source": "wowprogress_backup_declared_1_2",
         "own_rank": own_rank,
@@ -240,5 +311,10 @@ def rows_from_wowprogress_backup_for_schedule_scan(config: JsonDict) -> tuple[li
         "skipped_bad_rank": skipped_bad_rank,
         "region_filter": region_filter,
         "raw_region_filter": raw_region_filter,
+        "backup_file": str(resolved_backup),
+        "backup_file_exists": resolved_backup.exists(),
+        "own_guild": configured_guild or (saved_profile.name if saved_profile else ""),
+        "own_realm": configured_realm or (saved_profile.realm if saved_profile else ""),
+        "own_region": own_region,
     }
     return output, meta
