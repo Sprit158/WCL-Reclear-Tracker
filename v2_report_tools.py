@@ -13,7 +13,7 @@ from settings_manager import get_guild_profile_from_settings
 from v2_setup import build_v2_client, save_client_token
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 def safe_zone_id(report: JsonDict) -> int | str:
