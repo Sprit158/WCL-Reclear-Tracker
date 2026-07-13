@@ -9,7 +9,7 @@ from typing import Any
 from bootstrap import ensure_dependencies
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 def load_config_early(path: str = "config.json") -> JsonDict:
