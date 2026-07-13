@@ -10,7 +10,7 @@ V1_REPORT_FIGHTS_URL = "https://www.warcraftlogs.com/v1/report/fights/{report_co
 V1_GUILD_REPORTS_URL = "https://www.warcraftlogs.com/v1/reports/guild/{guild_name}/{realm}/{region}"
 V1_ZONES_URL = "https://www.warcraftlogs.com/v1/zones"
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 class WCLApiError(Exception):
