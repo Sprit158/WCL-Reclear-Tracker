@@ -6,7 +6,7 @@ from typing import Any, Iterable
 import re
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 REPORT_CODE_RE = re.compile(r"(?:warcraftlogs\.com/reports/)?([A-Za-z0-9]+)")
 
