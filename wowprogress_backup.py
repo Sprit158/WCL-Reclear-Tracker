@@ -322,7 +322,19 @@ def rows_from_wowprogress_backup_for_schedule_scan(config: JsonDict) -> tuple[li
             "wowprogress_notes": "Added as the user's comparison baseline.",
         })
 
-    output.sort(key=lambda r: (r.get("rank") is None, int(r.get("rank") or 999999), str(r.get("guild", "")).lower()))
+    # Process the user's reference row first so an interrupted batch cannot
+    # leave the comparison table without its baseline. Final output is sorted
+    # back into rank order after classification.
+    output.sort(key=lambda r: (
+        not (
+            normalise_guild(r.get("guild")) == own_guild
+            and normalise_realm(r.get("realm")) == own_realm
+            and normalise_region(r.get("region")) == own_region
+        ),
+        r.get("rank") is None,
+        int(r.get("rank") or 999999),
+        str(r.get("guild", "")).lower(),
+    ))
 
     resolved_backup = ensure_wowprogress_backup(config)
     meta = {
