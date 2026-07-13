@@ -226,6 +226,141 @@ def count_mythic_pulls(report_data: JsonDict, mythic_difficulty: int, midnight_z
     return pulls
 
 
+def shortlist_reports_for_deep_inspection(
+    reports: list[JsonDict],
+    tz_name: str,
+    midnight_zone_ids: set[int],
+    name_contains: list[str],
+    zone_lookup: dict[int, str],
+    selection_config: JsonDict,
+) -> tuple[list[JsonDict], dict[str, str]]:
+    """Use cheap report metadata to choose which reports need fight details.
+
+    Reports from a known non-target zone are discarded. Remaining reports are
+    grouped into same-night sessions, keeping split logs but choosing only the
+    strongest session on a date. Unknown zone metadata is retained so an
+    incomplete WCL report list cannot create a false negative.
+    """
+
+    metadata_config = selection_config.get("metadata_first", {})
+    if not metadata_config.get("enabled", True):
+        return list(reports), {report_code(r): "metadata_first_disabled" for r in reports if report_code(r)}
+
+    reasons: dict[str, str] = {}
+    by_day: dict[str, list[JsonDict]] = {}
+
+    for report in reports:
+        code = report_code(report)
+        start_ms = int(report.get("start", report.get("startTime", 0)) or 0)
+        if not code or not start_ms:
+            if code:
+                reasons[code] = "skipped_missing_report_start"
+            continue
+
+        zone_id = report_zone_id(report)
+        zone_name = report_zone_name(report, zone_lookup)
+        has_zone_metadata = zone_id is not None or bool(zone_name)
+        zone_matches = report_matches_midnight_zone(
+            report=report,
+            midnight_zone_ids=midnight_zone_ids,
+            name_contains=name_contains,
+            zone_lookup=zone_lookup,
+        )
+        if has_zone_metadata and not zone_matches:
+            reasons[code] = "skipped_known_non_target_zone"
+            continue
+
+        by_day.setdefault(report_date(report, tz_name), []).append(report)
+
+    max_gap_ms = int(selection_config.get("max_same_night_gap_minutes", 90)) * 60 * 1000
+    max_span_ms = int(selection_config.get("max_raid_night_span_hours", 8)) * 60 * 60 * 1000
+    overlap_ms = int(selection_config.get("overlap_tolerance_minutes", 10)) * 60 * 1000
+    max_sessions = max(1, int(metadata_config.get("max_sessions_per_date", 1)))
+    max_reports = max(1, int(metadata_config.get("max_reports_per_date", 4)))
+    selected: list[JsonDict] = []
+
+    def start_of(report: JsonDict) -> int:
+        return int(report.get("start", report.get("startTime", 0)) or 0)
+
+    def end_of(report: JsonDict) -> int:
+        return max(start_of(report), int(report.get("end", report.get("endTime", 0)) or 0))
+
+    def duration_of(report: JsonDict) -> int:
+        return min(max_span_ms, max(0, end_of(report) - start_of(report)))
+
+    for _, daily_reports in sorted(by_day.items()):
+        # Collapse simultaneous duplicate uploads, preferring the longer window.
+        deduplicated: list[JsonDict] = []
+        for candidate in sorted(daily_reports, key=lambda r: (start_of(r), -duration_of(r))):
+            duplicate_index = next(
+                (
+                    idx
+                    for idx, existing in enumerate(deduplicated)
+                    if intervals_overlap(
+                        start_of(candidate), end_of(candidate),
+                        start_of(existing), end_of(existing),
+                        overlap_ms,
+                    )
+                ),
+                None,
+            )
+            if duplicate_index is None:
+                deduplicated.append(candidate)
+            elif duration_of(candidate) > duration_of(deduplicated[duplicate_index]):
+                old = deduplicated[duplicate_index]
+                reasons[report_code(old)] = "skipped_overlapping_metadata_duplicate"
+                deduplicated[duplicate_index] = candidate
+            else:
+                reasons[report_code(candidate)] = "skipped_overlapping_metadata_duplicate"
+
+        # Split genuinely separate same-date runs into sessions.
+        sessions: list[list[JsonDict]] = []
+        for candidate in sorted(deduplicated, key=start_of):
+            placed = False
+            for session in sessions:
+                session_start = min(start_of(r) for r in session)
+                session_end = max(end_of(r) for r in session)
+                gap = max(0, start_of(candidate) - session_end, session_start - end_of(candidate))
+                proposed_span = max(session_end, end_of(candidate)) - min(session_start, start_of(candidate))
+                if gap <= max_gap_ms and proposed_span <= max_span_ms:
+                    session.append(candidate)
+                    placed = True
+                    break
+            if not placed:
+                sessions.append([candidate])
+
+        # Target-zone metadata is strongest; duration is the fallback signal.
+        def session_score(session: list[JsonDict]) -> tuple[int, int, int]:
+            known_target = sum(
+                1
+                for r in session
+                if report_zone_id(r) in midnight_zone_ids
+                or any(n.lower() in report_zone_name(r, zone_lookup).lower() for n in name_contains if n)
+            )
+            return known_target, sum(duration_of(r) for r in session), len(session)
+
+        chosen_sessions = sorted(sessions, key=session_score, reverse=True)[:max_sessions]
+        chosen_codes = {report_code(r) for s in chosen_sessions for r in s}
+        chosen_for_day = sorted(
+            [r for s in chosen_sessions for r in s],
+            key=lambda r: (-duration_of(r), start_of(r)),
+        )[:max_reports]
+        kept_codes = {report_code(r) for r in chosen_for_day}
+
+        for report in deduplicated:
+            code = report_code(report)
+            if code not in chosen_codes:
+                reasons[code] = "skipped_lower_ranked_same_date_session"
+            elif code not in kept_codes:
+                reasons[code] = "skipped_same_date_report_limit"
+
+        for report in sorted(chosen_for_day, key=start_of):
+            reasons[report_code(report)] = "selected_by_metadata_first_pass"
+            selected.append(report)
+
+    return selected, reasons
+
+
 def choose_one_report_per_day(
     report_candidates: list[tuple[JsonDict, JsonDict, int, str]],
     tz_name: str,
