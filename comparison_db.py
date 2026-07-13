@@ -7,7 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 SCHEMA_VERSION = 1
