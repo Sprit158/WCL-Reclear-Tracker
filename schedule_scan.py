@@ -836,13 +836,20 @@ def rows_from_discovery(config: JsonDict, logger, conn=None) -> list[dict]:
         rows, meta = rows_from_wowprogress_backup_for_schedule_scan(config)
         if logger:
             logger.print("Using WoWProgress backup as schedule-scan source.")
+            logger.print(f"Backup file: {meta.get('backup_file')}")
             logger.print(f"Backup rows in file: {meta.get('rows_in_backup')}")
+            logger.print(
+                f"Own guild used: {meta.get('own_guild') or 'not set'}-"
+                f"{meta.get('own_realm') or 'not set'}-{meta.get('own_region') or 'not set'}"
+            )
             logger.print(f"Own WoWProgress rank used: {meta.get('own_rank')}")
             logger.print(f"Declared 1-2 day guilds selected above own: {meta.get('selected')}")
             if meta.get("region_filter"):
                 logger.print(f"Region filter: {meta.get('region_filter')}")
             else:
                 logger.print("Region filter: world/all")
+            if not meta.get("backup_file_exists"):
+                logger.print("The local WoWProgress backup CSV is missing. Install the personal app package once; future updates will preserve it automatically.")
         return rows
 
     discovery = config.get("comparison", {}).get("discovery", {})
@@ -959,12 +966,18 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
         return
 
     logger.print("Schedule scan selected.")
-    logger.print("v1.6.20 scans declared 1-2 day guilds above you from the WoWProgress backup list.")
+    logger.print("Scanning declared 1-2 day guilds above you from the local WoWProgress backup list.")
     logger.print("Default mode is declared-only and does not call WCL, so it uses 0 WCL tokens.")
 
+    backup_cfg = config.get("comparison", {}).get("wowprogress_backup", {})
+    declared_only_mode = bool(backup_cfg.get("declared_only_scan", False)) and not bool(
+        backup_cfg.get("wcl_enrichment_enabled", False)
+    )
     parallel_enabled = bool(scan_cfg.get("parallel_schedule_scan", True))
     worker_count = max(1, int(scan_cfg.get("schedule_scan_workers", 4)))
-    if parallel_enabled and worker_count > 1:
+    if declared_only_mode:
+        logger.print("WCL report fetching is disabled for this declared-only run.")
+    elif parallel_enabled and worker_count > 1:
         logger.print(f"Parallel WCL report-list fetching enabled: {worker_count} workers.")
     else:
         logger.print("Parallel fetching disabled; using single-threaded schedule scan.")
