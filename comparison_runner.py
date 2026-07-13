@@ -38,6 +38,7 @@ from guild_fetcher import (
     report_zone_name,
     resolve_midnight_zone_ids,
     season_range_ms,
+    shortlist_reports_for_deep_inspection,
 )
 from processor import classify_reports, rows_to_dicts, canonical_boss_name, boss_allowed
 from settings_manager import get_global_settings_dir, get_guild_profile_from_settings
@@ -235,12 +236,58 @@ def process_single_guild(
     report_audit: list[JsonDict] = []
     minimum_pulls = int(selection_config.get("minimum_mythic_pulls", 1))
 
+    deep_reports, metadata_reasons = shortlist_reports_for_deep_inspection(
+        reports=guild_reports,
+        tz_name=tz_name,
+        midnight_zone_ids=midnight_zone_ids,
+        name_contains=zone_config.get("name_contains", ["Midnight"]),
+        zone_lookup=zone_lookup,
+        selection_config=selection_config,
+    )
+    deep_codes = {report_code(meta) for meta in deep_reports}
+    cached_codes: set[str] = set()
+    for meta in guild_reports:
+        code = report_code(meta)
+        if not code:
+            continue
+        try:
+            if cache.load_report(code) is not None:
+                cached_codes.add(code)
+        except Exception:
+            # Invalid legacy cache files are ignored here and will be fetched
+            # again only when selected by the metadata first pass.
+            pass
+    inspect_codes = deep_codes | cached_codes
+    logger.print(
+        f"  metadata-first: {len(guild_reports)} reports -> {len(deep_codes)} detailed candidates "
+        f"({len(deep_codes - cached_codes)} new request(s))"
+    )
+
     for meta in guild_reports:
         code = report_code(meta)
         if not code:
             continue
 
         local_date = report_date(meta, tz_name)
+
+        if code not in inspect_codes:
+            report_audit.append(
+                {
+                    "guild": guild,
+                    "realm": realm,
+                    "region": region,
+                    "date": local_date,
+                    "report_code": code,
+                    "title": meta.get("title", ""),
+                    "zone_id": report_zone_id(meta),
+                    "zone_name": report_zone_name(meta, zone_lookup),
+                    "tracked_boss_pulls": 0,
+                    "tracked_boss_breakdown": "",
+                    "candidate": False,
+                    "source": metadata_reasons.get(code, "skipped_by_metadata_first_pass"),
+                }
+            )
+            continue
 
         try:
             report_data, source = cache.fetch_or_load_report(
