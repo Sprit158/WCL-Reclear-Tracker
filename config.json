@@ -26,7 +26,7 @@
     "location": "global_app_data"
   },
   "api_mode": "v1_api_key",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "logs": {
     "enabled": true,
     "folder": "logs",
@@ -232,6 +232,8 @@
       "timeout_seconds": 30,
       "user_agent": "WCLReclearTracker/1.6.20 schedule-scan; local personal tool",
       "method": "wcl_api_report_list_candidate_filter",
+      "actual_schedule_verification_enabled": true,
+      "report_list_cache_ttl_hours": 168,
       "use_page_declared_schedule": false,
       "cache_folder": "schedule_report_lists",
       "force_refresh": false,
@@ -322,9 +324,9 @@
       "max_backup_guilds_used": 1000,
       "region_filter": "EU",
       "note_v1_6_18": "When use_as_schedule_scan_source=true, option 15 scans declared 1-2 day guilds from the WoWProgress backup above the user's guild instead of the 50-guild Raider.IO window.",
-      "declared_only_scan": true,
-      "wcl_enrichment_enabled": false,
-      "note_v1_6_19": "When declared_only_scan=true, option 15 scans the WoWProgress backup list without calling WCL. This uses zero WCL tokens.",
+      "declared_only_scan": false,
+      "wcl_enrichment_enabled": true,
+      "note_v1_6_19": "Actual verification fetches only WCL report-list metadata and stores it in SQLite. Fresh cached report lists are reused for seven days.",
       "allowed_region_filter_values": [
         "",
         "EU",
