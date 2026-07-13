@@ -12,7 +12,7 @@ import time
 import requests
 
 
-type JsonDict = dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 @dataclass(slots=True)
