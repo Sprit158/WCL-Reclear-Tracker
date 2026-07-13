@@ -74,6 +74,7 @@ class ScheduleResult:
     reason: str
     example_nights: str
     notes: str
+    first_month_average_raid_days: float | None = None
 
 
 @dataclass(slots=True)
@@ -801,6 +802,21 @@ def classify_schedule(
     avg_nights = round(sum(weekly_nights) / len(weekly_nights), 2)
     med_hours = round(float(median(weekly_hours)), 2)
 
+    # "First month" means the first four reset weeks containing the configured
+    # season start date. Include zero-night weeks so this metric is not inflated
+    # by looking only at weeks where the guild uploaded a report.
+    season_start = datetime.strptime(
+        config.get("season", {}).get("start_date", "2026-01-01"), "%Y-%m-%d"
+    ).date()
+    first_reset_week = season_start - timedelta(days=season_start.weekday())
+    first_month_end = first_reset_week + timedelta(days=28)
+    first_month_night_dates = {
+        datetime.strptime(night.date, "%Y-%m-%d").date()
+        for night in nights
+        if first_reset_week <= datetime.strptime(night.date, "%Y-%m-%d").date() < first_month_end
+    }
+    first_month_avg_days = round(len(first_month_night_dates) / 4, 2)
+
     day_counts: dict[str, int] = {}
     for night in nights:
         day_counts[night.weekday] = day_counts.get(night.weekday, 0) + 1
@@ -864,6 +880,7 @@ def classify_schedule(
         reason=reason,
         example_nights=" | ".join(examples),
         notes=f"report_source={source}; progression_cutoff={progression_cutoff_date or 'none'}; excluded_after_cutoff={reports_after_cutoff_excluded}; cheap report-list candidate scan only; no fight summaries fetched",
+        first_month_average_raid_days=first_month_avg_days,
     )
 
 
@@ -993,6 +1010,7 @@ def run_single_guild_schedule_test(
         f"Active weeks: {result.active_weeks}",
         f"Median raid nights/week: {result.inferred_days_per_week}",
         f"Average raid nights/active week: {result.average_raid_days_per_active_week}",
+        f"First-month average raid nights/week: {result.first_month_average_raid_days}",
         f"Median logged-window hours/week: {result.logged_window_hours_per_week}",
         f"Common raid days: {result.inferred_raid_days or 'none'}",
         f"Reason: {result.reason}",
@@ -1130,6 +1148,7 @@ def write_schedule_results(path: str | Path, rows: list[ScheduleResult]) -> None
         "active_weeks",
         "inferred_days_per_week",
         "average_raid_days_per_active_week",
+        "first_month_average_raid_days",
         "logged_window_hours_per_week",
         "inferred_hours_per_week",
         "inferred_raid_days",
