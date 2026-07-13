@@ -18,6 +18,8 @@ The local WoWProgress backup is copied to the persistent app-data folder the fir
 
 Version 1.7.3 processes every eligible guild above the saved guild rank instead of stopping after 25. A one-guild WCL v2 test verifies raid nights from target-zone report metadata and displays the WCL points used before wider enrichment is enabled.
 
+Version 1.7.4 enables that metadata verification for the full eligible guild list. Raw report lists, calculated schedule summaries and individual raid nights are stored in SQLite; fresh report lists are reused for seven days, and each batch displays its measured WCL point cost.
+
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
 ## Privacy
