@@ -10,6 +10,7 @@ REQUIRED_PACKAGES: dict[str, str] = {
     "pandas": "pandas",
     "openpyxl": "openpyxl",
     "dotenv": "python-dotenv",
+    "customtkinter": "customtkinter",
 }
 
 
