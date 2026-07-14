@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--test-v2-reports", action="store_true", help="Test WCL v2 guild report discovery for the saved guild.")
     parser.add_argument("--test-discovery", action="store_true", help="Test guild discovery only without fetching WCL reports.")
     parser.add_argument("--schedule-scan", action="store_true", help="Scan discovered guild pages for declared raid schedules only.")
+    parser.add_argument("--ranking-scope", choices=["region", "world"], default=None, help="Use regional or world raid rankings for the schedule scan.")
     parser.add_argument("--test-schedule-guild", action="store_true", help="Test actual raid days and WCL point cost for one guild using report metadata.")
     parser.add_argument("--test-wowprogress", action="store_true", help="Test WoWProgress 1-2 raids/week discovery only.")
     return parser
@@ -211,7 +212,7 @@ def main() -> None:
         return
 
     if args.schedule_scan:
-        run_schedule_scan(config, logger)
+        run_schedule_scan(config, logger, ranking_scope=args.ranking_scope)
         return
 
     if args.test_schedule_guild:
