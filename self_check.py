@@ -77,7 +77,7 @@ def main() -> None:
         ("First-month raid-day average", Path("schedule_scan.py").read_text(encoding="utf-8").count("first_month_average_raid_days") >= 4 and "first_month_average_raid_days" in Path("schedule_database.py").read_text(encoding="utf-8")),
         ("Adaptive core-days plus overtime algorithm", "infer_core_raid_days" in Path("schedule_scan.py").read_text(encoding="utf-8") and "core_day_ambiguity_gap" in Path("schedule_scan.py").read_text(encoding="utf-8") and '"minimum_counted_raid_day_minutes": 15' in config_text),
         ("Short Mythic reports count and cache", "hydrate_short_report_mythic_evidence" in Path("schedule_scan.py").read_text(encoding="utf-8") and "schedule_report_fight_cache" in Path("schedule_database.py").read_text(encoding="utf-8")),
-        ("Own guild included in comparison table", '"include_own": true' in config_text and "saved_own_guild_reference" in Path("wowprogress_backup.py").read_text(encoding="utf-8") and "(you)" in Path("query_schedule_cache.py").read_text(encoding="utf-8")),
+        ("Own guild included in comparison table", '"include_own": true' in config_text and "saved_own_guild_reference" in Path("wowprogress_backup.py").read_text(encoding="utf-8") and "own_rank is not None and not own_already_present" not in Path("wowprogress_backup.py").read_text(encoding="utf-8") and "Process the user's reference row first" in Path("wowprogress_backup.py").read_text(encoding="utf-8") and "(you)" in Path("query_schedule_cache.py").read_text(encoding="utf-8") and "Your saved guild is missing from the schedule cache" in Path("query_schedule_cache.py").read_text(encoding="utf-8")),
     ]
 
     failed = [name for name, ok in checks if not ok]
