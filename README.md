@@ -32,6 +32,8 @@ Version 1.7.9 asks whether to use region or world rankings before the schedule s
 
 Version 1.7.10 contains the same tested world/region workflow with the corrected automated release validation.
 
+Version 1.7.11 prevents Windows from replacing the launcher batch file while that file is still running. The updater stages a changed launcher and installs it only after the parent Command Prompt exits, preventing partial commands such as `THON_CMD` after a successful update.
+
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
 ## Privacy
