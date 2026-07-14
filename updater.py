@@ -5,7 +5,10 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import json
+import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import zipfile
 
@@ -15,6 +18,8 @@ LATEST_RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest
 APP_ROOT = Path(__file__).resolve().parent
 VERSION_FILE = APP_ROOT / "version.txt"
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+LAUNCHER_FILE = Path("START_WCL_RECLEAR_TRACKER.bat")
+PENDING_LAUNCHER_FILE = Path("START_WCL_RECLEAR_TRACKER.bat.update")
 
 # These belong to the local installation and must never be replaced by a release.
 PRESERVED_FILES = {
@@ -186,6 +191,16 @@ def apply_release(release_root: Path) -> int:
         if relative == Path("config.json"):
             continue
 
+        # cmd.exe reads a running batch file from disk as it executes it. If
+        # we replace that file in place, its byte offset can land in the middle
+        # of a new line (for example, THON_CMD instead of %PYTHON_CMD%). Stage
+        # the new launcher and replace it only after the parent cmd.exe exits.
+        if relative == LAUNCHER_FILE and destination.exists():
+            pending = APP_ROOT / PENDING_LAUNCHER_FILE
+            shutil.copy2(source, pending)
+            copied += 1
+            continue
+
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         copied += 1
@@ -197,6 +212,64 @@ def apply_release(release_root: Path) -> int:
         copied += 1
 
     return copied
+
+
+def schedule_pending_launcher_replace() -> bool:
+    pending = APP_ROOT / PENDING_LAUNCHER_FILE
+    destination = APP_ROOT / LAUNCHER_FILE
+    if not pending.exists():
+        return False
+
+    parent_pid = os.getppid()
+    helper = r"""
+import os
+import sys
+import time
+
+parent_pid = int(sys.argv[1])
+pending = sys.argv[2]
+destination = sys.argv[3]
+
+if os.name == "nt":
+    import ctypes
+    SYNCHRONIZE = 0x00100000
+    INFINITE = 0xFFFFFFFF
+    handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, parent_pid)
+    if handle:
+        ctypes.windll.kernel32.WaitForSingleObject(handle, INFINITE)
+        ctypes.windll.kernel32.CloseHandle(handle)
+else:
+    while True:
+        try:
+            os.kill(parent_pid, 0)
+        except OSError:
+            break
+        time.sleep(0.25)
+
+os.replace(pending, destination)
+"""
+    kwargs: dict[str, Any] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = (
+            getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        )
+    else:
+        kwargs["start_new_session"] = True
+
+    try:
+        subprocess.Popen(
+            [sys.executable, "-c", helper, str(parent_pid), str(pending), str(destination)],
+            **kwargs,
+        )
+    except OSError as exc:
+        raise UpdateError(f"Could not schedule the launcher replacement: {exc}") from exc
+    return True
 
 
 def run_update() -> int:
@@ -227,8 +300,12 @@ def run_update() -> int:
             f"Files were copied, but version.txt says v{installed_after} instead of v{latest}."
         )
 
+    launcher_deferred = schedule_pending_launcher_replace()
+
     print(f"Updated successfully to v{latest} ({copied} program files replaced).")
     print("Your local guild data, reports, cache, database and personal settings were preserved.")
+    if launcher_deferred:
+        print("The launcher update will finish automatically after this Command Prompt window closes.")
     return 10
 
 
