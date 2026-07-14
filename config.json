@@ -26,7 +26,7 @@
     "location": "global_app_data"
   },
   "api_mode": "v1_api_key",
-  "version": "1.7.8",
+  "version": "1.7.9",
   "logs": {
     "enabled": true,
     "folder": "logs",
@@ -186,7 +186,7 @@
       "zone_id": 46,
       "region": "eu",
       "metric": "progress",
-      "max_pages": 10,
+      "max_pages": 70,
       "guilds_above_own": 50,
       "guilds_below_own": 0,
       "max_discovered_guilds_used": 50,
@@ -212,13 +212,15 @@
       "force_refresh_cache": false,
       "cache_backend": "sqlite",
       "cache_note": "v1.6.20 caches Raider.IO discovered guild rankings in comparison.sqlite and fetches top 2000 by default.",
-      "cache_schema_version": "v3_ignore_boolean_defeated"
+      "cache_schema_version": "v4_world_region_scope"
     },
     "report_discovery_mode": "v2_with_v1_fallback",
     "note_report_discovery": "Guild list discovery is separate. v2 report discovery is used once a guild name/realm/region is known.",
     "schedule_scan": {
       "enabled": true,
       "scan_all_ranked_guilds_to_own": true,
+      "ranking_scope": "region",
+      "replace_visible_results_each_scan": true,
       "use_inferred_schedule_from_logs": true,
       "max_guilds_per_run": 0,
       "sources": {
