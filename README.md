@@ -22,7 +22,9 @@ Version 1.7.4 enables that metadata verification for the full eligible guild lis
 
 Version 1.7.5 renders saved likely two-day guilds as a compact console table. It also stores `first_month_average_raid_days`, calculated across the first four reset weeks from the configured season start with zero-night weeks included.
 
-Version 1.7.6 uses adaptive weekday recurrence to separate stable core raid days from progression overtime. It recognises one-, two- and three-day schedules, lowers confidence when several weekdays are tied by a rotating or changed schedule, and displays recurring core days plus overtime per active week. Any-length report containing a Mythic boss fight counts as a raid day; fight summaries are fetched only for otherwise-too-short reports and are then cached permanently. The saved guild is included in the comparison table and marked `(you)`.
+Version 1.7.6 uses adaptive weekday recurrence to separate stable core raid days from progression overtime. It recognises one-, two- and three-day schedules, lowers confidence when several weekdays are tied by a rotating or changed schedule, and displays recurring core days plus overtime per active week. Any-length report containing a Mythic boss fight counts as a raid day; fight summaries are fetched only for otherwise-too-short reports and are then cached permanently.
+
+Version 1.7.7 always adds the saved guild as a comparison reference, even when its rank is unavailable or it is absent from the local backup. The saved guild is processed first, marked `(you)`, and option 3 warns when an older cache needs rebuilding through option 2.
 
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
