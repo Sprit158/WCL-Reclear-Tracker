@@ -26,7 +26,11 @@
     "location": "global_app_data"
   },
   "api_mode": "v1_api_key",
-  "version": "1.7.11",
+  "version": "2.0.0",
+  "ui": {
+    "mode": "desktop_gui",
+    "theme": "premium_dark"
+  },
   "logs": {
     "enabled": true,
     "folder": "logs",
