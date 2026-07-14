@@ -34,6 +34,10 @@ Version 1.7.10 contains the same tested world/region workflow with the corrected
 
 Version 1.7.11 prevents Windows from replacing the launcher batch file while that file is still running. The updater stages a changed launcher and installs it only after the parent Command Prompt exits, preventing partial commands such as `THON_CMD` after a successful update.
 
+## Version 2.0
+
+Version 2.0 launches a premium desktop GUI based on the Mechanics Tracker visual language: a dark rounded sidebar, overview cards, live scan activity and a large schedule table. The table supports text, status and own-guild filters plus independent minimum/maximum filters for Rank, Avg, M1, Med, Hrs, Wks, Nights and Reports. Select Region or World before running a Mythic VS / DR / MQD schedule scan; raw WCL caches remain reusable between views and scans.
+
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
 ## Privacy
