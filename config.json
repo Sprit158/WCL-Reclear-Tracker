@@ -26,7 +26,7 @@
     "location": "global_app_data"
   },
   "api_mode": "v1_api_key",
-  "version": "1.7.7",
+  "version": "1.7.8",
   "logs": {
     "enabled": true,
     "folder": "logs",
@@ -218,6 +218,7 @@
     "note_report_discovery": "Guild list discovery is separate. v2 report discovery is used once a guild name/realm/region is known.",
     "schedule_scan": {
       "enabled": true,
+      "scan_all_ranked_guilds_to_own": true,
       "use_inferred_schedule_from_logs": true,
       "max_guilds_per_run": 0,
       "sources": {
