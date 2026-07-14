@@ -360,6 +360,14 @@ def raiderio_api_attempts(discovery: JsonDict, page: int) -> list[tuple[str, dic
 
     url = "https://raider.io/api/v1/raiding/raid-rankings"
 
+    if region == "world":
+        return [
+            (url, {"raid": raid_slug, "difficulty": difficulty, "region": "world", "page": page, "limit": limit}),
+            (url, {"raid": raid_slug, "difficulty": difficulty, "page": page, "limit": limit}),
+            (url, {"raid": raid_slug, "difficulty": difficulty, "region": "world", "page": page}),
+            (url, {"raid": raid_slug, "difficulty": difficulty, "region": "world", "limit": limit}),
+        ]
+
     return [
         (url, {"raid": raid_slug, "difficulty": difficulty, "region": region, "page": page, "limit": limit}),
         (url, {"raid": raid_slug, "difficulty": difficulty, "region": region.upper(), "page": page, "limit": limit}),
@@ -405,7 +413,10 @@ def discover_raiderio_api_guilds(config: JsonDict, logger=None) -> tuple[list[Di
                 continue
 
             for item in parsed:
-                if item.region.lower() != region.lower():
+                if region != "world" and item.region.lower() != region.lower():
+                    continue
+                if region == "world" and item.region.lower() == "world":
+                    # World is the ranking scope, not a valid WCL guild region.
                     continue
                 key = (normalise(item.guild), normalise(item.realm), item.region.upper())
                 if key in seen:
@@ -465,7 +476,7 @@ def parse_raiderio_html(text: str, region: str) -> list[DiscoveredGuild]:
         realm = html.unescape(match.group("realm")).replace("-", " ").strip()
         item_region = match.group("region").upper()
 
-        if item_region.lower() != region.lower():
+        if region.lower() != "world" and item_region.lower() != region.lower():
             continue
 
         found.append(
