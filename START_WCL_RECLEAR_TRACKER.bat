@@ -1,5 +1,5 @@
 @echo off
-title WCL Reclear Tracker v1.7.7
+title WCL Reclear Tracker v1.7.8
 
 rem Find a working Python command. The standard Windows installer often
 rem provides "py" without adding "python" to PATH.
@@ -21,11 +21,11 @@ if not defined PYTHON_CMD goto nopython
 
 :menu
 cls
-echo WCL Reclear Tracker v1.7.7
+echo WCL Reclear Tracker v1.7.8
 echo.
 echo 1. Run main tracker
-echo 2. Find likely 2-day guilds
-echo 3. Show saved likely 2-day guilds
+echo 2. Check every ranked guild up to mine
+echo 3. Show all checked guild schedules
 echo 4. Settings and maintenance
 echo 5. Check for and install updates
 echo 6. Exit
@@ -59,7 +59,7 @@ goto finished
 
 :querytwoday
 cls
-%PYTHON_CMD% query_schedule_cache.py --two-day --limit 100
+%PYTHON_CMD% query_schedule_cache.py --limit 1000
 goto finished
 
 :settings
