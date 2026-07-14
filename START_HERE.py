@@ -1,5 +1,5 @@
 """
-START HERE - WCL Reclear Tracker v1.7.10
+START HERE - WCL Reclear Tracker v1.7.11
 
 Normal run:
     python START_HERE.py
@@ -24,5 +24,5 @@ from main import main
 
 
 if __name__ == "__main__":
-    print("Starting WCL Reclear Tracker v1.7.10...")
+    print("Starting WCL Reclear Tracker v1.7.11...")
     main()
