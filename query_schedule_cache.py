@@ -113,6 +113,7 @@ def main() -> None:
             active_weeks,
             raid_nights_found,
             is_likely_two_day,
+            schedule_confidence,
             reason
         FROM schedule_scan_results
     """
