@@ -1,5 +1,5 @@
 @echo off
-title WCL Reclear Tracker v1.7.11
+title WCL Reclear Tracker v2.0
 
 rem Find a working Python command. The standard Windows installer often
 rem provides "py" without adding "python" to PATH.
@@ -18,6 +18,9 @@ if not defined PYTHON_CMD (
 )
 
 if not defined PYTHON_CMD goto nopython
+
+%PYTHON_CMD% gui_app.py
+exit /b %errorlevel%
 
 :menu
 cls
