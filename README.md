@@ -26,6 +26,8 @@ Version 1.7.6 uses adaptive weekday recurrence to separate stable core raid days
 
 Version 1.7.7 always adds the saved guild as a comparison reference, even when its rank is unavailable or it is absent from the local backup. The saved guild is processed first, marked `(you)`, and option 3 warns when an older cache needs rebuilding through option 2.
 
+Version 1.7.8 scans the complete EU Mythic ranking list through the saved guild's rank instead of limiting candidates to the declared 1-2 day backup. Every schedule result is cached and option 3 displays all checked guilds with a `2d?` classification column. The saved guild is forcibly inserted into the real scan queue before cache/API processing.
+
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
 ## Privacy
