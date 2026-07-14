@@ -24,13 +24,14 @@ def render_table(rows, own_profile=None) -> str:
     columns = [
         ("Rank", "rank", 4, "right"),
         ("Guild", "guild", 19, "left"),
-        ("Realm", "realm", 12, "left"),
+        ("Realm", "realm", 9, "left"),
+        ("2d?", "is_likely_two_day", 3, "left"),
         ("Avg", "average_raid_days_per_active_week", 5, "right"),
         ("M1", "first_month_average_raid_days", 5, "right"),
         ("Med", "inferred_days_per_week", 5, "right"),
         ("Hrs", "logged_window_hours_per_week", 5, "right"),
         ("Wks", "active_weeks", 4, "right"),
-        ("Common days", "inferred_raid_days", 18, "left"),
+        ("Common days", "inferred_raid_days", 14, "left"),
     ]
     numeric = {
         "average_raid_days_per_active_week",
@@ -44,7 +45,11 @@ def render_table(rows, own_profile=None) -> str:
     for row in rows:
         cells = []
         for _, key, width, align in columns:
-            value = number_cell(row[key]) if key in numeric else row[key]
+            if key == "is_likely_two_day":
+                confidence = str(row["schedule_confidence"] or "").strip().lower()
+                value = "?" if confidence in {"unverified", "error"} else ("Yes" if row[key] else "No")
+            else:
+                value = number_cell(row[key]) if key in numeric else row[key]
             if key == "guild" and own_profile and (
                 str(row["guild"]).strip().lower() == own_profile.name.strip().lower()
                 and str(row["realm"]).strip().lower() == own_profile.realm.strip().lower()
@@ -63,7 +68,7 @@ def main() -> None:
     parser.add_argument("--days", help="Filter inferred raid days text, e.g. Mon,Wed or Wed.")
     parser.add_argument("--min-hours", type=float, default=None)
     parser.add_argument("--max-hours", type=float, default=None)
-    parser.add_argument("--limit", type=int, default=50)
+    parser.add_argument("--limit", type=int, default=1000)
     args = parser.parse_args()
 
     config = load_config_early()
