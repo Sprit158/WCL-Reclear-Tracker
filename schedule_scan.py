@@ -7,6 +7,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 from zoneinfo import ZoneInfo
+import copy
 import csv
 import json
 import math
@@ -1281,17 +1282,22 @@ def rows_from_discovery(config: JsonDict, logger, conn=None) -> list[dict]:
     # v1.7.8 scans the complete ranking list down to the user's guild instead
     # of limiting candidates to the declared 1-2 day WoWProgress backup.
     if bool(scan_cfg.get("scan_all_ranked_guilds_to_own", False)):
-        discovery = config.get("comparison", {}).get("discovery", {})
+        ranking_scope = str(scan_cfg.get("ranking_scope", "region") or "region").strip().lower()
+        if ranking_scope not in {"region", "world"}:
+            ranking_scope = "region"
+        discovery_config = copy.deepcopy(config)
+        discovery = discovery_config.get("comparison", {}).get("discovery", {})
         saved_profile = get_guild_profile_from_settings()
         own_guild = (discovery.get("own_guild") or (saved_profile.name if saved_profile else "")).strip()
         own_realm = (discovery.get("own_realm") or (saved_profile.realm if saved_profile else "")).strip()
         own_region = (discovery.get("own_region") or (saved_profile.region if saved_profile else "EU")).strip().upper()
+        discovery["region"] = "world" if ranking_scope == "world" else own_region.lower()
 
         def identity_token(value: str) -> str:
             return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
 
         own_key = (identity_token(own_guild), identity_token(own_realm), own_region)
-        discovered = discover_guilds(config, logger=logger)
+        discovered = discover_guilds(discovery_config, logger=logger)
         own_item = next(
             (
                 item for item in discovered
@@ -1302,14 +1308,14 @@ def rows_from_discovery(config: JsonDict, logger, conn=None) -> list[dict]:
 
         fallback_rank = None
         try:
-            fallback_rank = int(backup_cfg.get("own_world_rank") or 0) or None
+            fallback_rank = int(scan_cfg.get("own_rank_fallbacks", {}).get(ranking_scope) or 0) or None
         except (TypeError, ValueError):
             pass
         cutoff_rank = own_item.rank if own_item is not None else fallback_rank
 
         if cutoff_rank is None:
             if logger:
-                logger.print("Could not find your guild in the complete ranking list and no saved own rank is available.")
+                logger.print(f"Could not find your guild in the complete {ranking_scope} ranking list.")
                 logger.print("The scan has stopped rather than accidentally checking an unlimited ranking range.")
             return []
 
@@ -1325,7 +1331,7 @@ def rows_from_discovery(config: JsonDict, logger, conn=None) -> list[dict]:
                 "endboss_kill_timestamp_ms": getattr(item, "endboss_kill_timestamp_ms", None),
                 "endboss_kill_date": getattr(item, "endboss_kill_date", ""),
                 "endboss_kill_source": getattr(item, "endboss_kill_source", ""),
-                "source": "raiderio_all_ranked_to_own",
+                "source": f"raiderio_{ranking_scope}_ranked_to_own",
             }
             for item in selected
         ]
@@ -1355,7 +1361,8 @@ def rows_from_discovery(config: JsonDict, logger, conn=None) -> list[dict]:
         if conn is not None:
             upsert_discovered_guilds(conn, rows)
         if logger:
-            logger.print(f"Complete ranking source selected: {len(rows)} EU guilds through rank {cutoff_rank}, including your guild.")
+            label = own_region if ranking_scope == "region" else "world"
+            logger.print(f"Complete {label} ranking source selected: {len(rows)} guilds through rank {cutoff_rank}, including your guild.")
         return rows
 
     use_backup_source = bool(backup_cfg.get("use_as_schedule_scan_source", False)) or (
@@ -1544,14 +1551,17 @@ def write_schedule_results(path: str | Path, rows: list[ScheduleResult]) -> None
             writer.writerow(asdict(row))
 
 
-def run_schedule_scan(config: JsonDict, logger) -> None:
+def run_schedule_scan(config: JsonDict, logger, ranking_scope: str | None = None) -> None:
     scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
+    if ranking_scope in {"region", "world"}:
+        scan_cfg["ranking_scope"] = ranking_scope
     if not scan_cfg.get("enabled", True):
         logger.print("Schedule scan is disabled in config.json.")
         return
 
     logger.print("Schedule scan selected.")
-    logger.print("Scanning your guild plus declared 1-2 day guilds above you from the local WoWProgress backup list.")
+    logger.print(f"Ranking scope: {str(scan_cfg.get('ranking_scope', 'region')).title()}")
+    logger.print("Ranking tier: Mythic VS / DR / MQD only.")
     logger.print("Schedule verification uses WCL report lists; only otherwise-too-short reports need a cached fight-summary check.")
 
     backup_cfg = config.get("comparison", {}).get("wowprogress_backup", {})
@@ -1569,6 +1579,10 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
     conn = connect_schedule_db(config)
 
     guild_rows = rows_from_discovery(config, logger=logger, conn=conn)
+    if bool(scan_cfg.get("scan_all_ranked_guilds_to_own", False)) and not guild_rows:
+        logger.print("No complete ranking list was available, so no schedule results were replaced.")
+        conn.close()
+        return
     guild_rows, own_row_forced = ensure_saved_own_guild_row(config, guild_rows)
     if own_row_forced:
         logger.print("Your saved guild was forcibly added to the real scan queue.")
@@ -1600,6 +1614,15 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
         logger.print(f"Processing all eligible guilds in this run: {len(selected_rows)}")
     else:
         logger.print(f"Processing this run's configured guild limit: {len(selected_rows)}/{len(guild_rows)}")
+
+    if bool(scan_cfg.get("replace_visible_results_each_scan", True)):
+        # Raw report lists and short-report fight summaries remain cached. Only
+        # the derived visible table is replaced so region and world ranks can
+        # never be mixed together in option 3.
+        conn.execute("DELETE FROM schedule_scan_results")
+        conn.execute("DELETE FROM schedule_raid_nights")
+        conn.commit()
+        logger.print("Previous visible schedule table cleared for this ranking scope; raw WCL caches were preserved.")
     output_file = scan_cfg.get("output_file", "output/comparison/schedule_scan.csv")
     debug_file = scan_cfg.get("debug_file", "output/comparison/schedule_scan_debug.txt")
     tz_name = scan_cfg.get("timezone") or config.get("season", {}).get("timezone", "Europe/London")
