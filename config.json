@@ -26,7 +26,7 @@
     "location": "global_app_data"
   },
   "api_mode": "v1_api_key",
-  "version": "1.7.10",
+  "version": "1.7.11",
   "logs": {
     "enabled": true,
     "folder": "logs",
