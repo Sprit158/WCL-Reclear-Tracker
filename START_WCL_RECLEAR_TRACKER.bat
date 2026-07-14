@@ -1,5 +1,5 @@
 @echo off
-title WCL Reclear Tracker v1.7.8
+title WCL Reclear Tracker v1.7.9
 
 rem Find a working Python command. The standard Windows installer often
 rem provides "py" without adding "python" to PATH.
@@ -21,7 +21,7 @@ if not defined PYTHON_CMD goto nopython
 
 :menu
 cls
-echo WCL Reclear Tracker v1.7.8
+echo WCL Reclear Tracker v1.7.9
 echo.
 echo 1. Run main tracker
 echo 2. Check every ranked guild up to mine
@@ -54,7 +54,15 @@ goto finished
 
 :schedulescan
 cls
-%PYTHON_CMD% START_HERE.py --schedule-scan
+echo Choose the Mythic VS / DR / MQD ranking scope.
+echo.
+echo 1. Region - all guilds through your regional rank
+echo 2. World  - all guilds through your world rank
+echo.
+set /p ranking_choice=Choose 1 or 2 [1]: 
+set "ranking_scope=region"
+if "%ranking_choice%"=="2" set "ranking_scope=world"
+%PYTHON_CMD% START_HERE.py --schedule-scan --ranking-scope %ranking_scope%
 goto finished
 
 :querytwoday
