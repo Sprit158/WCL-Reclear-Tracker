@@ -1278,6 +1278,86 @@ def rows_from_discovery(config: JsonDict, logger, conn=None) -> list[dict]:
     backup_cfg = config.get("comparison", {}).get("wowprogress_backup", {})
     scan_cfg = config.get("comparison", {}).get("schedule_scan", {})
 
+    # v1.7.8 scans the complete ranking list down to the user's guild instead
+    # of limiting candidates to the declared 1-2 day WoWProgress backup.
+    if bool(scan_cfg.get("scan_all_ranked_guilds_to_own", False)):
+        discovery = config.get("comparison", {}).get("discovery", {})
+        saved_profile = get_guild_profile_from_settings()
+        own_guild = (discovery.get("own_guild") or (saved_profile.name if saved_profile else "")).strip()
+        own_realm = (discovery.get("own_realm") or (saved_profile.realm if saved_profile else "")).strip()
+        own_region = (discovery.get("own_region") or (saved_profile.region if saved_profile else "EU")).strip().upper()
+
+        def identity_token(value: str) -> str:
+            return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+        own_key = (identity_token(own_guild), identity_token(own_realm), own_region)
+        discovered = discover_guilds(config, logger=logger)
+        own_item = next(
+            (
+                item for item in discovered
+                if (identity_token(item.guild), identity_token(item.realm), item.region.strip().upper()) == own_key
+            ),
+            None,
+        )
+
+        fallback_rank = None
+        try:
+            fallback_rank = int(backup_cfg.get("own_world_rank") or 0) or None
+        except (TypeError, ValueError):
+            pass
+        cutoff_rank = own_item.rank if own_item is not None else fallback_rank
+
+        if cutoff_rank is None:
+            if logger:
+                logger.print("Could not find your guild in the complete ranking list and no saved own rank is available.")
+                logger.print("The scan has stopped rather than accidentally checking an unlimited ranking range.")
+            return []
+
+        selected = [item for item in discovered if int(item.rank) <= int(cutoff_rank)]
+        write_discovered_guilds(discovery.get("output_file", "output/comparison/discovered_guilds.csv"), selected)
+
+        rows = [
+            {
+                "guild": item.guild,
+                "realm": item.realm,
+                "region": item.region,
+                "rank": item.rank,
+                "endboss_kill_timestamp_ms": getattr(item, "endboss_kill_timestamp_ms", None),
+                "endboss_kill_date": getattr(item, "endboss_kill_date", ""),
+                "endboss_kill_source": getattr(item, "endboss_kill_source", ""),
+                "source": "raiderio_all_ranked_to_own",
+            }
+            for item in selected
+        ]
+
+        own_present = any(
+            (identity_token(row["guild"]), identity_token(row["realm"]), str(row["region"]).upper()) == own_key
+            for row in rows
+        )
+        if saved_profile and not own_present:
+            rows.append({
+                "guild": saved_profile.name,
+                "realm": saved_profile.realm,
+                "region": saved_profile.region.upper(),
+                "rank": cutoff_rank,
+                "endboss_kill_timestamp_ms": None,
+                "endboss_kill_date": "",
+                "endboss_kill_source": "",
+                "source": "saved_own_guild_reference",
+            })
+
+        # Scan the user's guild first; final results are sorted by rank.
+        rows.sort(key=lambda row: (
+            (identity_token(row["guild"]), identity_token(row["realm"]), str(row["region"]).upper()) != own_key,
+            row.get("rank") is None,
+            int(row.get("rank") or 999999),
+        ))
+        if conn is not None:
+            upsert_discovered_guilds(conn, rows)
+        if logger:
+            logger.print(f"Complete ranking source selected: {len(rows)} EU guilds through rank {cutoff_rank}, including your guild.")
+        return rows
+
     use_backup_source = bool(backup_cfg.get("use_as_schedule_scan_source", False)) or (
         scan_cfg.get("source_mode") == "wowprogress_backup_above_own_declared_1_2"
     )
@@ -1338,6 +1418,58 @@ def rows_from_discovery(config: JsonDict, logger, conn=None) -> list[dict]:
         }
         for g in selected
     ]
+
+
+def ensure_saved_own_guild_row(config: JsonDict, guild_rows: list[dict]) -> tuple[list[dict], bool]:
+    """Guarantee the saved guild reaches the real scan queue, regardless of source mode."""
+    profile = get_guild_profile_from_settings()
+    if profile is None:
+        return guild_rows, False
+
+    def token(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+    own_key = (token(profile.name), token(profile.realm), profile.region.strip().upper())
+    fallback_rank = None
+    try:
+        fallback_rank = int(
+            config.get("comparison", {}).get("wowprogress_backup", {}).get("own_world_rank") or 0
+        ) or None
+    except (TypeError, ValueError):
+        pass
+
+    own_row = None
+    others: list[dict] = []
+    for row in guild_rows:
+        row_key = (token(row.get("guild")), token(row.get("realm")), str(row.get("region") or "").upper())
+        if row_key == own_key and own_row is None:
+            own_row = dict(row)
+        else:
+            others.append(row)
+
+    added = own_row is None
+    if own_row is None:
+        own_row = {
+            "guild": profile.name,
+            "realm": profile.realm,
+            "region": profile.region.upper(),
+            "rank": fallback_rank,
+            "endboss_kill_timestamp_ms": None,
+            "endboss_kill_date": "",
+            "endboss_kill_source": "",
+            "source": "saved_own_guild_forced_scan",
+        }
+    else:
+        # Use the exact saved identity so option 3's reference-row query cannot
+        # miss it because a ranking source used a different realm spelling.
+        own_row["guild"] = profile.name
+        own_row["realm"] = profile.realm
+        own_row["region"] = profile.region.upper()
+        if own_row.get("rank") is None and fallback_rank is not None:
+            own_row["rank"] = fallback_rank
+        own_row["source"] = own_row.get("source") or "saved_own_guild_forced_scan"
+
+    return [own_row, *others], added
 
 
 def filter_unprocessed_guild_rows(conn, config: JsonDict, guild_rows: list[dict], logger) -> list[dict]:
@@ -1437,6 +1569,11 @@ def run_schedule_scan(config: JsonDict, logger) -> None:
     conn = connect_schedule_db(config)
 
     guild_rows = rows_from_discovery(config, logger=logger, conn=conn)
+    guild_rows, own_row_forced = ensure_saved_own_guild_row(config, guild_rows)
+    if own_row_forced:
+        logger.print("Your saved guild was forcibly added to the real scan queue.")
+    else:
+        logger.print("Your saved guild is present and has been moved to the front of the real scan queue.")
     if not guild_rows:
         logger.print("No guild rows available for schedule scan.")
         conn.close()
