@@ -81,6 +81,10 @@ def main() -> None:
         ("Own guild forced into real scan queue", "ensure_saved_own_guild_row" in Path("schedule_scan.py").read_text(encoding="utf-8") and "saved_own_guild_forced_scan" in Path("schedule_scan.py").read_text(encoding="utf-8")),
         ("All ranked guilds scanned through own rank", '"scan_all_ranked_guilds_to_own": true' in config_text and "raiderio_all_ranked_to_own" in Path("schedule_scan.py").read_text(encoding="utf-8") and "int(item.rank) <= int(cutoff_rank)" in Path("schedule_scan.py").read_text(encoding="utf-8")),
         ("All checked schedules shown", "Show all checked guild schedules" in Path("START_WCL_RECLEAR_TRACKER.bat").read_text(encoding="utf-8") and "query_schedule_cache.py --limit 1000" in Path("START_WCL_RECLEAR_TRACKER.bat").read_text(encoding="utf-8") and '("2d?", "is_likely_two_day"' in Path("query_schedule_cache.py").read_text(encoding="utf-8")),
+        ("Schedule table selects confidence", "is_likely_two_day,\n            schedule_confidence," in Path("query_schedule_cache.py").read_text(encoding="utf-8")),
+        ("World or region prompt", "--ranking-scope" in Path("main.py").read_text(encoding="utf-8") and "Choose the Mythic VS / DR / MQD ranking scope" in Path("START_WCL_RECLEAR_TRACKER.bat").read_text(encoding="utf-8")),
+        ("World discovery keeps all regions", 'region != "world" and item.region.lower() != region.lower()' in Path("guild_discovery.py").read_text(encoding="utf-8") and 'discovery["region"] = "world" if ranking_scope == "world"' in Path("schedule_scan.py").read_text(encoding="utf-8")),
+        ("Ranking scopes do not mix visible results", '"replace_visible_results_each_scan": true' in config_text and "Previous visible schedule table cleared for this ranking scope" in Path("schedule_scan.py").read_text(encoding="utf-8")),
     ]
 
     failed = [name for name, ok in checks if not ok]
