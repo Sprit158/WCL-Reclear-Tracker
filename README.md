@@ -28,6 +28,8 @@ Version 1.7.7 always adds the saved guild as a comparison reference, even when i
 
 Version 1.7.8 scans the complete EU Mythic ranking list through the saved guild's rank instead of limiting candidates to the declared 1-2 day backup. Every schedule result is cached and option 3 displays all checked guilds with a `2d?` classification column. The saved guild is forcibly inserted into the real scan queue before cache/API processing.
 
+Version 1.7.9 asks whether to use region or world rankings before the schedule scan. Region mode scans the saved guild's region through its regional rank; world mode keeps guilds from every region through the saved guild's world rank. Both modes remain restricted to Mythic VS / DR / MQD. Raw WCL caches are shared, while the derived visible table is replaced per scan so ranking scopes cannot mix. It also fixes option 3 failing to select the `schedule_confidence` column required by the `2d?` display.
+
 Python 3.10 or newer is required. The launcher recognises `py -3`, `python` and `python3`.
 
 ## Privacy
