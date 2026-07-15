@@ -90,6 +90,7 @@ def main() -> None:
         ("Ranking scopes do not mix visible results", '"replace_visible_results_each_scan": true' in config_text and "Previous visible schedule table cleared for this ranking scope" in Path("schedule_scan.py").read_text(encoding="utf-8")),
         ("Main-run support modules present", all(Path(name).exists() for name in ["cache_manager.py", "logger_utils.py", "processor.py", "wcl_api.py", "comparison_runner.py", "v2_setup.py", "api/wcl_api_v1.py"])),
         ("GUI WCL credential boxes", "WCL v1 API key (legacy)" in Path("gui_app.py").read_text(encoding="utf-8") and "Save & test v2" in Path("gui_app.py").read_text(encoding="utf-8") and "show=\"•\"" in Path("gui_app.py").read_text(encoding="utf-8")),
+        ("Unicode-safe console logging", "errors=\"replace\"" in Path("logger_utils.py").read_text(encoding="utf-8") and "logging must" in Path("logger_utils.py").read_text(encoding="utf-8")),
     ]
 
     failed = [name for name, ok in checks if not ok]
