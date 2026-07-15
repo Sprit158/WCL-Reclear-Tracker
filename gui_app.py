@@ -19,7 +19,15 @@ def launch() -> None:
 
     from gui_data import NUMERIC_FILTERS, TABLE_COLUMNS, filter_schedule_rows, load_schedule_rows, summary_for
     from main import load_config_early
-    from settings_manager import get_guild_profile_from_settings
+    from settings_manager import (
+        WCLApiKey,
+        WCLV2Credentials,
+        get_api_key_from_settings,
+        get_guild_profile_from_settings,
+        get_v2_credentials_from_settings,
+        save_api_key_to_settings,
+        save_v2_credentials_to_settings,
+    )
 
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
@@ -297,6 +305,36 @@ def launch() -> None:
                 ctk.CTkButton(tools, text=text, anchor="w", height=38, corner_radius=11, fg_color=colours["panel_alt"], hover_color=colours["border"], command=command).pack(fill="x", padx=20, pady=5)
             ctk.CTkLabel(tools, text="Updates and long-running commands are shown in Scan activity.", text_color=colours["muted"], wraplength=360, justify="left", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=20, pady=(10, 20))
 
+            credentials = ctk.CTkFrame(page, fg_color=colours["panel"], corner_radius=18, border_width=1, border_color=colours["border"])
+            credentials.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(16, 0))
+            credentials.grid_columnconfigure((0, 1), weight=1)
+            ctk.CTkLabel(credentials, text="Warcraft Logs credentials", text_color=colours["text"], font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=20, pady=(18, 2))
+            ctk.CTkLabel(credentials, text="Saved locally on this PC. Values stay masked and are never placed in the program folder or GitHub.", text_color=colours["muted"], font=ctk.CTkFont(size=11)).grid(row=1, column=0, columnspan=2, sticky="w", padx=20, pady=(0, 12))
+
+            v1 = ctk.CTkFrame(credentials, fg_color="transparent")
+            v1.grid(row=2, column=0, sticky="ew", padx=(20, 10), pady=(0, 20))
+            ctk.CTkLabel(v1, text="WCL v1 API key (legacy)", text_color=colours["text"], font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", pady=(0, 5))
+            self.v1_key_input = ctk.CTkEntry(v1, placeholder_text="Paste WCL v1 API key", show="•", height=38, corner_radius=11)
+            self.v1_key_input.pack(fill="x", pady=(0, 8))
+            v1_actions = ctk.CTkFrame(v1, fg_color="transparent")
+            v1_actions.pack(fill="x")
+            ctk.CTkButton(v1_actions, text="Save v1 key", height=34, corner_radius=11, fg_color=colours["accent"], command=self.save_v1_key).pack(side="left")
+            self.v1_status = ctk.CTkLabel(v1_actions, text="Not saved", text_color=colours["muted"], font=ctk.CTkFont(size=11))
+            self.v1_status.pack(side="left", padx=10)
+
+            v2 = ctk.CTkFrame(credentials, fg_color="transparent")
+            v2.grid(row=2, column=1, sticky="ew", padx=(10, 20), pady=(0, 20))
+            ctk.CTkLabel(v2, text="WCL v2 OAuth", text_color=colours["text"], font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", pady=(0, 5))
+            self.v2_client_id_input = ctk.CTkEntry(v2, placeholder_text="Client ID", show="•", height=38, corner_radius=11)
+            self.v2_client_id_input.pack(fill="x", pady=(0, 7))
+            self.v2_client_secret_input = ctk.CTkEntry(v2, placeholder_text="Client Secret", show="•", height=38, corner_radius=11)
+            self.v2_client_secret_input.pack(fill="x", pady=(0, 8))
+            v2_actions = ctk.CTkFrame(v2, fg_color="transparent")
+            v2_actions.pack(fill="x")
+            ctk.CTkButton(v2_actions, text="Save & test v2", height=34, corner_radius=11, fg_color=colours["accent"], command=self.save_and_test_v2).pack(side="left")
+            self.v2_status = ctk.CTkLabel(v2_actions, text="Not saved", text_color=colours["muted"], font=ctk.CTkFont(size=11))
+            self.v2_status.pack(side="left", padx=10)
+
         def show_page(self, page: str) -> None:
             self.active_page = page
             titles = {"overview": "Overview", "schedules": "Guild schedules", "activity": "Scan activity", "settings": "Settings & maintenance"}
@@ -334,6 +372,9 @@ def launch() -> None:
                 self.guild_input.insert(0, profile.name)
                 self.realm_input.insert(0, profile.realm)
                 self.region_input.set(profile.region.upper())
+            if hasattr(self, "v1_status"):
+                self.v1_status.configure(text="Saved locally" if get_api_key_from_settings() else "Not saved")
+                self.v2_status.configure(text="Saved locally" if get_v2_credentials_from_settings() else "Not saved")
 
         def _filter_values(self) -> dict[str, str]:
             return {key: value.get() if hasattr(value, "get") else str(value) for key, value in self.filters.items()}
@@ -445,6 +486,34 @@ def launch() -> None:
                 self._log("Guild name and realm are required before saving.")
                 return
             self.run_command(["--configure-guild", "--guild", guild, "--realm", realm, "--region", region], "Save guild profile")
+
+        def save_v1_key(self) -> None:
+            key = self.v1_key_input.get().strip()
+            if not key:
+                self._log("Paste a WCL v1 API key before saving.")
+                return
+            try:
+                save_api_key_to_settings(WCLApiKey(api_key=key))
+                self.v1_key_input.delete(0, "end")
+                self.v1_status.configure(text="Saved locally")
+                self._log("WCL v1 API key saved locally.")
+            except Exception as exc:
+                self._log(f"Could not save the WCL v1 key: {type(exc).__name__}: {exc}")
+
+        def save_and_test_v2(self) -> None:
+            client_id = self.v2_client_id_input.get().strip()
+            client_secret = self.v2_client_secret_input.get().strip()
+            if not client_id or not client_secret:
+                self._log("Enter both WCL v2 Client ID and Client Secret before testing.")
+                return
+            try:
+                save_v2_credentials_to_settings(WCLV2Credentials(client_id=client_id, client_secret=client_secret))
+                self.v2_client_id_input.delete(0, "end")
+                self.v2_client_secret_input.delete(0, "end")
+                self.v2_status.configure(text="Saved locally — testing…")
+                self.run_command(["--setup-v2"], "WCL v2 setup test")
+            except Exception as exc:
+                self._log(f"Could not save the WCL v2 credentials: {type(exc).__name__}: {exc}")
 
     ReclearApp().mainloop()
 
