@@ -88,6 +88,8 @@ def main() -> None:
         ("World or region prompt", "--ranking-scope" in Path("main.py").read_text(encoding="utf-8") and "Choose the Mythic VS / DR / MQD ranking scope" in Path("START_WCL_RECLEAR_TRACKER.bat").read_text(encoding="utf-8")),
         ("World discovery keeps all regions", 'region != "world" and item.region.lower() != region.lower()' in Path("guild_discovery.py").read_text(encoding="utf-8") and 'discovery["region"] = "world" if ranking_scope == "world"' in Path("schedule_scan.py").read_text(encoding="utf-8")),
         ("Ranking scopes do not mix visible results", '"replace_visible_results_each_scan": true' in config_text and "Previous visible schedule table cleared for this ranking scope" in Path("schedule_scan.py").read_text(encoding="utf-8")),
+        ("Main-run support modules present", all(Path(name).exists() for name in ["cache_manager.py", "logger_utils.py", "processor.py", "wcl_api.py", "comparison_runner.py", "v2_setup.py", "api/wcl_api_v1.py"])),
+        ("GUI WCL credential boxes", "WCL v1 API key (legacy)" in Path("gui_app.py").read_text(encoding="utf-8") and "Save & test v2" in Path("gui_app.py").read_text(encoding="utf-8") and "show=\"•\"" in Path("gui_app.py").read_text(encoding="utf-8")),
     ]
 
     failed = [name for name, ok in checks if not ok]
