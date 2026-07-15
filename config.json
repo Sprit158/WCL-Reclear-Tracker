@@ -26,7 +26,7 @@
     "location": "global_app_data"
   },
   "api_mode": "v1_api_key",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "ui": {
     "mode": "desktop_gui",
     "theme": "premium_dark"
