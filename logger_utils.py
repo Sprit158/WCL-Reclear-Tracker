@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import sys
 
 
 class RunLogger:
@@ -30,5 +31,14 @@ class RunLogger:
             f.write(message + "\n")
 
     def print(self, message: str = "") -> None:
-        print(message)
-        self.write(message)
+        # A Windows console commonly defaults to cp1252. Guild names and
+        # realms can contain characters outside that code page; logging must
+        # never abort a schedule scan because one name cannot be rendered.
+        text = str(message)
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        try:
+            console_text = text.encode(encoding, errors="replace").decode(encoding)
+        except (LookupError, UnicodeError):
+            console_text = text.encode("utf-8", errors="replace").decode("utf-8")
+        print(console_text)
+        self.write(text)
